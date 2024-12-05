@@ -3,6 +3,7 @@ import numpy as np
 from torch import nn
 from torch.nn import functional as F
 import torch
+import copy
 
 
 def build_mlp(layers_dims: List[int]):
@@ -41,6 +42,68 @@ class MockModel(torch.nn.Module):
         """
         return torch.randn((self.bs, self.n_steps, self.repr_dim)).to(self.device)
 
+
+# Not going to work
+class Encoder(nn.Module):
+    def __init__(self, latent_dim=256):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(2, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(128 * 9 * 9, latent_dim)
+        )
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class Predictor(nn.Module):
+    def __init__(self, latent_dim=256):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(latent_dim + 2, 512),
+            nn.ReLU(),
+            nn.Linear(512, latent_dim)
+        )
+
+    def forward(self, state, action):
+        x = torch.cat([state, action], dim=-1)
+        return self.net(x)
+
+
+class SimpleJEPA(nn.Module):
+    def __init__(self, latent_dim=256):
+        super().__init__()
+        self.encoder = Encoder(latent_dim)
+        self.predictor = Predictor(latent_dim)
+        self.repr_dim = latent_dim
+
+    def forward(self, states, actions):
+        B, T = states.shape[:2]
+        s0 = self.encoder(states[:, 0])
+        predictions = [s0]
+        current_state = s0
+        for t in range(T - 1):
+            next_state = self.predictor(current_state, actions[:, t])
+            predictions.append(next_state)
+            current_state = next_state
+        return torch.stack(predictions, dim=1)
+
+    def compute_loss(self, states, actions):
+        predictions = self(states, actions)
+        targets = []
+        for t in range(states.shape[1]):
+            target = self.encoder(states[:, t])
+            targets.append(target)
+        targets = torch.stack(targets, dim=1)
+        loss = torch.nn.functional.mse_loss(predictions, targets)
+        return loss
+        
 
 class Prober(torch.nn.Module):
     def __init__(
