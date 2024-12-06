@@ -97,6 +97,27 @@ class Encoder(nn.Module):
         x = self.fc(x)
         return x
 
+# For training using BYOL, this will be for the online encoder to predict the target encoder's projected representation
+class OnlinePredictor(nn.Module):
+    def __init__(self, projected_dim=256):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(projected_dim, projected_dim)
+        )
+
+    def forward(self, projection):
+        return self.mlp(projection)
+
+# For training using BYOL, will project representations into some new space
+class Projector(nn.Module):
+    def __init__(self, projected_dim=256, repr_dim=256):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(repr_dim, projected_dim)
+        )
+
+    def forward(self, encoder_rep):
+        return self.mlp(encoder_rep)
 
 class Predictor(nn.Module):
     def __init__(self, repr_dim=256, action_dim=2):
