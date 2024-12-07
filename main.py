@@ -113,6 +113,8 @@ def train_model(device):
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
+            if batch_idx % 100 == 0:
+                print(f"Batch {batch_idx}, Loss: {loss.item():.8e}")
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.8e}")
 
