@@ -71,6 +71,7 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
     for probe_attr, loss in avg_losses.items():
         print(f"{probe_attr} loss: {loss}")
 
+
 def je_loss(predictions, targets):
     #predictions = F.normalize(predictions, dim=-1)
     #targets = F.normalize(targets, dim=-1)
@@ -78,6 +79,7 @@ def je_loss(predictions, targets):
     #loss = F.mse_loss(predictions, targets)
     loss = 1 - F.cosine_similarity(predictions, targets, dim=-1).mean()
     return loss
+
 
 def train_model(device):
     # Load training data
