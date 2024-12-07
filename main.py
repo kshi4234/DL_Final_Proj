@@ -91,7 +91,7 @@ def train_model(device):
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-    num_epochs = 1
+    num_epochs = 3
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
