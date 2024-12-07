@@ -73,10 +73,6 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
 
 
 def je_loss(predictions, targets):
-    #predictions = F.normalize(predictions, dim=-1)
-    #targets = F.normalize(targets, dim=-1)
-    
-    #loss = F.mse_loss(predictions, targets)
     loss = 1 - F.cosine_similarity(predictions, targets, dim=-1).mean()
     return loss
 
@@ -93,10 +89,7 @@ def train_model(device):
     model = JEPAModel(device=device)
     model.to(device)
 
-    optimizer = torch.optim.Adam(
-        list(model.encoder.parameters()) + list(model.predictor.parameters()),
-        lr=1e-3
-    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     num_epochs = 1
     for epoch in range(num_epochs):
@@ -111,32 +104,21 @@ def train_model(device):
 
             # Compute target representations using the target encoder
             with torch.no_grad():
-                targets = model.target_encoder(
+                targets = model.encoder(
                     states.view(-1, *states.shape[2:])
                 ).view(states.size(0), states.size(1), -1)  # [B, T, D]
 
             # Compute loss between predictions[:, 1:] and targets[:, 1:]
             loss = je_loss(predictions[:, 1:], targets[:, 1:])
-
-            #print(f"Predictions mean: {predictions.mean().item():.8e}, std: {predictions.std().item():.8e}")
-            #print(f"Targets mean: {targets.mean().item():.8e}, std: {targets.std().item():.8e}")
             loss.backward()
             optimizer.step()
-
-            # Update target encoder
-            model.update_target_encoder()
-
             total_loss += loss.item()
-
-
-            #print(f"Batch {batch_idx}, Loss: {loss.item():.8e}")
-
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.8e}")
 
         # Optionally evaluate the model
-        if (epoch + 1) % 2 == 0:
-            evaluate_current_model(model, device)
+        #if (epoch + 1) % 2 == 0:
+            #evaluate_current_model(model, device)
 
     # Save the trained model
     torch.save(model.state_dict(), 'jepa_model.pth')
