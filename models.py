@@ -4,6 +4,8 @@ from torch import nn
 from torch.nn import functional as F
 import torch
 import torch.nn.functional as F
+from encs import ResNet, build_resnet
+from preds import ResPredictor, RNNPredictor
 
 
 def build_mlp(layers_dims: List[int]):
@@ -119,8 +121,8 @@ class JEPAModel(nn.Module):
         self.repr_dim = repr_dim
         self.action_dim = action_dim
 
-        self.encoder = Encoder(repr_dim=repr_dim).to(device)
-        self.predictor = Predictor(repr_dim, action_dim).to(device)
+        self.encoder = build_resnet().to(device)
+        self.predictor = ResPredictor().to(device)
 
     def forward(self, states, actions):
         """
