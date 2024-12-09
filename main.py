@@ -78,7 +78,12 @@ def je_loss(predictions, targets):
     #loss = F.mse_loss(predictions, targets)
     loss = 1 - F.cosine_similarity(predictions, targets, dim=-1).mean()
     return loss
-
+def byol_loss(pred, target):
+    # pred: [B,T,D]
+    # target: [B,T,D]
+    pred_norm = F.normalize(pred, dim=-1)
+    target_norm = F.normalize(target, dim=-1)
+    return 2 - 2 * (pred_norm * target_norm).sum(dim=-1).mean()
 def train_model(device):
     # Load training data
     train_loader = create_wall_dataloader(
@@ -107,36 +112,22 @@ def train_model(device):
             optimizer.zero_grad()
             predictions = model(states, actions)  # [B, T, D]
 
-            # Compute target representations using the target encoder
             with torch.no_grad():
-                targets = model.target_encoder(
-                    states.view(-1, *states.shape[2:])
-                ).view(states.size(0), states.size(1), -1)  # [B, T, D]
+                targets = model.get_target_representations(states)  # [B, T, D]
 
-            # Compute loss between predictions[:, 1:] and targets[:, 1:]
-            loss = je_loss(predictions[:, 1:], targets[:, 1:])
-
-            #print(f"Predictions mean: {predictions.mean().item():.8e}, std: {predictions.std().item():.8e}")
-            #print(f"Targets mean: {targets.mean().item():.8e}, std: {targets.std().item():.8e}")
+            loss = byol_loss(predictions[:, 1:], targets[:, 1:])
             loss.backward()
             optimizer.step()
 
-            # Update target encoder
-            model.update_target_encoder()
+            model._update_target_encoder(model.momentum)
 
             total_loss += loss.item()
-
-
-            #print(f"Batch {batch_idx}, Loss: {loss.item():.8e}")
+            if batch_idx % 100 == 0:
+                print(f"Batch {batch_idx}, Loss: {loss.item():.8e}")
 
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.8e}")
 
-        # Optionally evaluate the model
-        if (epoch + 1) % 2 == 0:
-            evaluate_current_model(model, device)
-
-    # Save the trained model
     torch.save(model.state_dict(), 'jepa_model.pth')
 
 

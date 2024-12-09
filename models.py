@@ -112,102 +112,83 @@ class Predictor(nn.Module):
         return self.mlp(x)
 
 class JEPAModel(nn.Module):
-    def __init__(self, device="cuda", repr_dim=256, action_dim=2, momentum=0.999):
+    def __init__(self, device="cuda", repr_dim=256, action_dim=2, momentum=0.99):
         super().__init__()
         self.device = device
         self.repr_dim = repr_dim
         self.action_dim = action_dim
         self.momentum = momentum
 
-        self.encoder = Encoder(repr_dim=repr_dim).to(device)
+        self.online_encoder = Encoder(repr_dim=repr_dim).to(device)
         self.target_encoder = Encoder(repr_dim=repr_dim).to(device)
+        self._update_target_encoder(tau=1.0)
+
         self.predictor = Predictor(repr_dim, action_dim).to(device)
 
-        # Initialize target encoder parameters with encoder parameters
-        for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
-            param_k.data.copy_(param_q.data)
-            param_k.requires_grad = False  # Stop gradients for target encoder
+        for param in self.target_encoder.parameters():
+            param.requires_grad = False
 
     @torch.no_grad()
-    def update_target_encoder(self):
-        for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
-            param_k.data = param_k.data * self.momentum + param_q.data * (1.0 - self.momentum)
+    def _update_target_encoder(self, tau: float):
+        """
+        param_t = tau * param_t + (1 - tau) * param_o
+        """
+        for param_o, param_t in zip(self.online_encoder.parameters(), self.target_encoder.parameters()):
+            param_t.data = param_t.data * tau + param_o.data * (1 - tau)
 
     def forward(self, states, actions):
         """
-        Args:
-            During training:
-                states: [B, T, Ch, H, W]
-            During inference:
-                states: [B, 1, Ch, H, W]
-            actions: [B, T-1, 2]
-
-        Output:
-            predictions: [B, T, D]
+        [B, T, D]
         """
         B, T, C, H, W = states.shape
-        device = states.device
 
         predictions = []
-        if self.training:
-            # Encode all states
-            state_reprs = self.encoder(states.view(B * T, C, H, W)).view(B, T, -1)  # [B, T, D]
+        current_repr = self.online_encoder(states[:, 0])  # [B, D]
+        predictions.append(current_repr.unsqueeze(1))
 
-            # Initial state representation
-            current_repr = state_reprs[:, 0]  # [B, D]
-
-            predictions.append(current_repr.unsqueeze(1))  # [B, 1, D]
-
-            for t in range(T - 1):
-                action = actions[:, t]  # [B, action_dim]
-                # Predict next representation
-                pred_repr = self.predictor(current_repr, action)  # [B, D]
-                predictions.append(pred_repr.unsqueeze(1))  # [B, 1, D]
-                # Update current representation with the actual next state representation
-                current_repr = state_reprs[:, t + 1]  # Use actual next state representation
-        else:
-            # Inference mode
-            current_repr = self.encoder(states[:, 0])  # [B, D]
-            predictions.append(current_repr.unsqueeze(1))  # [B, 1, D]
-
-            for t in range(T - 1):
-                action = actions[:, t]
-                pred_repr = self.predictor(current_repr, action)
-                predictions.append(pred_repr.unsqueeze(1))
-                current_repr = pred_repr  # Update current representation with prediction
-
-        predictions = torch.cat(predictions, dim=1)  # [B, T, D]
-
-        return predictions
-
-    def predict_future(self, init_states, actions):
-        """
-        Unroll the model to predict future representations.
-
-        Args:
-            init_states: [B, 1, Ch, H, W]
-            actions: [B, T-1, 2]
-
-        Returns:
-            predicted_reprs: [T, B, D]
-        """
-        B, _, C, H, W = init_states.shape
-        T_minus1 = actions.shape[1]
-        T = T_minus1 + 1
-
-        predicted_reprs = []
-
-        #initial state
-        current_repr = self.encoder(init_states[:, 0])  # [B, D]
-        predicted_reprs.append(current_repr.unsqueeze(0))  # [1, B, D]
-
-        for t in range(T_minus1):
-            action = actions[:, t]  # [B, action_dim]
-            # Predict next representation
-            pred_repr = self.predictor(current_repr, action)  # [B, D]
-            predicted_reprs.append(pred_repr.unsqueeze(0))  # [1, B, D]
-            # Update current representation for next step
+        for t in range(T - 1):
+            action = actions[:, t]
+            pred_repr = self.predictor(current_repr, action)
+            predictions.append(pred_repr.unsqueeze(1))
             current_repr = pred_repr
 
-        predicted_reprs = torch.cat(predicted_reprs, dim=0)  # [T, B, D]
-        return predicted_reprs
+        predictions = torch.cat(predictions, dim=1)  # [B, T, D]
+        return predictions
+
+    def get_target_representations(self, states):
+        B, T, C, H, W = states.shape
+        with torch.no_grad():
+            target_reprs = self.target_encoder(states.view(-1, C, H, W)).view(B, T, -1)
+        return target_reprs
+
+    # def predict_future(self, init_states, actions):
+    #     """
+    #     Unroll the model to predict future representations.
+
+    #     Args:
+    #         init_states: [B, 1, Ch, H, W]
+    #         actions: [B, T-1, 2]
+
+    #     Returns:
+    #         predicted_reprs: [T, B, D]
+    #     """
+    #     B, _, C, H, W = init_states.shape
+    #     T_minus1 = actions.shape[1]
+    #     T = T_minus1 + 1
+
+    #     predicted_reprs = []
+
+    #     #initial state
+    #     current_repr = self.encoder(init_states[:, 0])  # [B, D]
+    #     predicted_reprs.append(current_repr.unsqueeze(0))  # [1, B, D]
+
+    #     for t in range(T_minus1):
+    #         action = actions[:, t]  # [B, action_dim]
+    #         # Predict next representation
+    #         pred_repr = self.predictor(current_repr, action)  # [B, D]
+    #         predicted_reprs.append(pred_repr.unsqueeze(0))  # [1, B, D]
+    #         # Update current representation for next step
+    #         current_repr = pred_repr
+
+    #     predicted_reprs = torch.cat(predicted_reprs, dim=0)  # [T, B, D]
+    #     return predicted_reprs
