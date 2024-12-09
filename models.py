@@ -161,34 +161,34 @@ class JEPAModel(nn.Module):
             target_reprs = self.target_encoder(states.view(-1, C, H, W)).view(B, T, -1)
         return target_reprs
 
-    # def predict_future(self, init_states, actions):
-    #     """
-    #     Unroll the model to predict future representations.
+    def predict_future(self, init_states, actions):
+        """
+        Unroll the model to predict future representations.
 
-    #     Args:
-    #         init_states: [B, 1, Ch, H, W]
-    #         actions: [B, T-1, 2]
+        Args:
+            init_states: [B, 1, Ch, H, W]
+            actions: [B, T-1, 2]
 
-    #     Returns:
-    #         predicted_reprs: [T, B, D]
-    #     """
-    #     B, _, C, H, W = init_states.shape
-    #     T_minus1 = actions.shape[1]
-    #     T = T_minus1 + 1
+        Returns:
+            predicted_reprs: [T, B, D]
+        """
+        B, _, C, H, W = init_states.shape
+        T_minus1 = actions.shape[1]
+        T = T_minus1 + 1
 
-    #     predicted_reprs = []
+        predicted_reprs = []
 
-    #     #initial state
-    #     current_repr = self.encoder(init_states[:, 0])  # [B, D]
-    #     predicted_reprs.append(current_repr.unsqueeze(0))  # [1, B, D]
+        #initial state
+        current_repr = self.encoder(init_states[:, 0])  # [B, D]
+        predicted_reprs.append(current_repr.unsqueeze(0))  # [1, B, D]
 
-    #     for t in range(T_minus1):
-    #         action = actions[:, t]  # [B, action_dim]
-    #         # Predict next representation
-    #         pred_repr = self.predictor(current_repr, action)  # [B, D]
-    #         predicted_reprs.append(pred_repr.unsqueeze(0))  # [1, B, D]
-    #         # Update current representation for next step
-    #         current_repr = pred_repr
+        for t in range(T_minus1):
+            action = actions[:, t]  # [B, action_dim]
+            # Predict next representation
+            pred_repr = self.predictor(current_repr, action)  # [B, D]
+            predicted_reprs.append(pred_repr.unsqueeze(0))  # [1, B, D]
+            # Update current representation for next step
+            current_repr = pred_repr
 
-    #     predicted_reprs = torch.cat(predicted_reprs, dim=0)  # [T, B, D]
-    #     return predicted_reprs
+        predicted_reprs = torch.cat(predicted_reprs, dim=0)  # [T, B, D]
+        return predicted_reprs
