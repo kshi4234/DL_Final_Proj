@@ -79,6 +79,12 @@ def je_loss(predictions, targets):
     loss = 1 - F.cosine_similarity(predictions, targets, dim=-1).mean()
     return loss
 
+# Online encoder predictor of target projection
+def projection_loss(online, target):
+    norm_inner_prod = torch.inner(online, target) / (torch.linalg.norm(online) * torch.linalg.norm(target))
+    loss = 2 - (2 * norm_inner_prod)
+    return loss
+
 def train_model(device):
     # Load training data
     train_loader = create_wall_dataloader(
@@ -105,7 +111,7 @@ def train_model(device):
             actions = batch.actions  # [B, T-1, action_dim]
 
             optimizer.zero_grad()
-            predictions = model(states, actions)  # [B, T, D]
+            predictions, online_preds, targets = model(states, actions)  # [B, T, D]
 
             # Compute target representations using the target encoder
             with torch.no_grad():
@@ -114,7 +120,7 @@ def train_model(device):
                 ).view(states.size(0), states.size(1), -1)  # [B, T, D]
 
             # Compute loss between predictions[:, 1:] and targets[:, 1:]
-            loss = je_loss(predictions[:, 1:], targets[:, 1:])
+            loss = je_loss(predictions[:, 1:], targets[:, 1:]) + projection_loss(online_preds, targets)
 
             #print(f"Predictions mean: {predictions.mean().item():.8e}, std: {predictions.std().item():.8e}")
             #print(f"Targets mean: {targets.mean().item():.8e}, std: {targets.std().item():.8e}")
