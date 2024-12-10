@@ -186,6 +186,7 @@ class JEPAModel(nn.Module):
             # Encode all states
             # Also perform BYOL for training
             # TODO: Not sure if I am properly forcing BYOL loss to be symmetrical
+            # TODO: Will also need to modify this loop when doing recurrent training
             state_reprs = self.online_encoder(states.view(B * T, C, H, W)).view(B, T, -1)  # [B, T, D]
             online_preds = self.online_projector(state_reprs)
             online_preds = self.online_preditor(online_preds)
