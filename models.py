@@ -133,7 +133,7 @@ class Predictor(nn.Module):
         return self.mlp(x)
 
 class JEPAModel(nn.Module):
-    def __init__(self, device="cuda", repr_dim=256, action_dim=2, momentum=0.999):
+    def __init__(self, device="cuda", repr_dim=256, proj_dim=128, action_dim=2, momentum=0.999):
         super().__init__()
         self.device = device
         self.repr_dim = repr_dim
@@ -142,9 +142,15 @@ class JEPAModel(nn.Module):
 
         self.online_encoder = Encoder(repr_dim=repr_dim).to(device)
         self.target_encoder = Encoder(repr_dim=repr_dim).to(device)
-        # Target encoder does not require backprop for BYOL; freeze target encoder
+        self.online_projecter = Projector(projected_dim=proj_dim, repr_dim=repr_dim).to(device)
+        self.target_projecter = Projector(projected_dim=proj_dim, repr_dim=repr_dim).to(device)
+        self.online_predictor = OnlinePredictor(projected_dim=proj_dim)
+        # Target encoder does not require backprop for BYOL; freeze target encoder parameters
         for param in self.target_encoder.parameters():
             param.requires_grad = False
+        for param in self.target_projector.parameters():
+            param.requires_grad = False
+        
         self.predictor = Predictor(repr_dim, action_dim).to(device)
 
         # Initialize target encoder parameters with encoder parameters
@@ -174,9 +180,17 @@ class JEPAModel(nn.Module):
         device = states.device
 
         predictions = []
+        online_preds = []
+        targets = []
         if self.training:
             # Encode all states
+            # Also perform BYOL for training
+            # TODO: Not sure if I am properly forcing BYOL loss to be symmetrical
             state_reprs = self.online_encoder(states.view(B * T, C, H, W)).view(B, T, -1)  # [B, T, D]
+            online_preds = self.online_projector(state_reprs)
+            online_preds = self.online_preditor(online_preds)
+            targets = self.target_encoder(states.view(B * T, C, H, W)).view(B, T, -1)  # [B, T, D]
+            targets = self.target_projector(targets)
 
             # Initial state representation
             current_repr = state_reprs[:, 0]  # [B, D]
@@ -203,7 +217,7 @@ class JEPAModel(nn.Module):
 
         predictions = torch.cat(predictions, dim=1)  # [B, T, D]
 
-        return predictions
+        return predictions, online_preds, targets
 
     def predict_future(self, init_states, actions):
         """
