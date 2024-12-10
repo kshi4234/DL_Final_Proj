@@ -140,19 +140,29 @@ class JEPAModel(nn.Module):
         self.action_dim = action_dim
         self.momentum = momentum
 
-        self.encoder = Encoder(repr_dim=repr_dim).to(device)
+        self.online_encoder = Encoder(repr_dim=repr_dim).to(device)
         self.target_encoder = Encoder(repr_dim=repr_dim).to(device)
+        # Target encoder does not require backprop for BYOL; freeze target encoder
+        for param in self.target_encoder.parameters():
+            param.requires_grad = False
         self.predictor = Predictor(repr_dim, action_dim).to(device)
 
         # Initialize target encoder parameters with encoder parameters
-        for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
+        for param_q, param_k in zip(self.online_encoder.parameters(), self.target_encoder.parameters()):
             param_k.data.copy_(param_q.data)
             param_k.requires_grad = False  # Stop gradients for target encoder
 
     @torch.no_grad()
+    # Exponential moving average for BYOL
     def update_target_encoder(self):
-        for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
+        for param_q, param_k in zip(self.online_encoder.parameters(), self.target_encoder.parameters()):
             param_k.data = param_k.data * self.momentum + param_q.data * (1.0 - self.momentum)
+
+    # Online encoder predictor of target projection
+    def projection_loss(online, target):
+        norm_inner_prod = torch.inner(online, target) / (torch.linalg.norm(online) * torch.linalg.norm(target))
+        loss = 2 - (2 * norm_inner_prod)
+        return loss
 
     def forward(self, states, actions):
         """
@@ -172,7 +182,7 @@ class JEPAModel(nn.Module):
         predictions = []
         if self.training:
             # Encode all states
-            state_reprs = self.encoder(states.view(B * T, C, H, W)).view(B, T, -1)  # [B, T, D]
+            state_reprs = self.online_encoder(states.view(B * T, C, H, W)).view(B, T, -1)  # [B, T, D]
 
             # Initial state representation
             current_repr = state_reprs[:, 0]  # [B, D]
@@ -188,7 +198,7 @@ class JEPAModel(nn.Module):
                 current_repr = state_reprs[:, t + 1]  # Use actual next state representation
         else:
             # Inference mode
-            current_repr = self.encoder(states[:, 0])  # [B, D]
+            current_repr = self.online_encoder(states[:, 0])  # [B, D]
             predictions.append(current_repr.unsqueeze(1))  # [B, 1, D]
 
             for t in range(T - 1):
