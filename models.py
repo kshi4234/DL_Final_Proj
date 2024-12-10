@@ -158,12 +158,6 @@ class JEPAModel(nn.Module):
         for param_q, param_k in zip(self.online_encoder.parameters(), self.target_encoder.parameters()):
             param_k.data = param_k.data * self.momentum + param_q.data * (1.0 - self.momentum)
 
-    # Online encoder predictor of target projection
-    def projection_loss(online, target):
-        norm_inner_prod = torch.inner(online, target) / (torch.linalg.norm(online) * torch.linalg.norm(target))
-        loss = 2 - (2 * norm_inner_prod)
-        return loss
-
     def forward(self, states, actions):
         """
         Args:
