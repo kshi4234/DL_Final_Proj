@@ -73,12 +73,23 @@ class Encoder(nn.Module):
     def __init__(self, input_channels=2, input_size=(65, 65), repr_dim=256):
         super().__init__()
         self.conv_net = nn.Sequential(
-            nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(input_channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
+            ResidualBlock(32),
+            SpatialAttentionBlock(32),
+            
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
             nn.ReLU(),
+            ResidualBlock(64),
+            SpatialAttentionBlock(64),
+            
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
             nn.ReLU(),
+            ResidualBlock(128),
+            SpatialAttentionBlock(128),
         )
 
         with torch.no_grad():
@@ -227,15 +238,39 @@ class JEPAModel(nn.Module):
             target_params.data.mul_(self.momentum).add_(tau * online_params.data)
 
 class SpatialAttentionBlock(nn.Module):
-    """Spatial attention mechanism to focus on important regions"""
     def __init__(self, channels):
         super().__init__()
-        self.conv_spatial = nn.Conv2d(channels, 1, kernel_size=7, padding=3)
-        self.sigmoid = nn.Sigmoid()
-
+        self.query = nn.Conv2d(channels, channels//8, 1)
+        self.key = nn.Conv2d(channels, channels//8, 1)
+        self.value = nn.Conv2d(channels, channels, 1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+        
     def forward(self, x):
-        attention = self.sigmoid(self.conv_spatial(x))
-        return x * attention
+        B, C, H, W = x.shape
+        query = self.query(x).view(B, -1, H*W).permute(0, 2, 1)
+        key = self.key(x).view(B, -1, H*W)
+        energy = torch.bmm(query, key)
+        attention = F.softmax(energy, dim=-1)
+        value = self.value(x).view(B, -1, H*W)
+        out = torch.bmm(value, attention.permute(0, 2, 1))
+        out = out.view(B, C, H, W)
+        return x + self.gamma * out
+
+class ResidualBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+        
+    def forward(self, x):
+        residual = x
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = self.bn2(self.conv2(x))
+        x += residual
+        x = F.relu(x)
+        return x
 
 class StateActionFusion(nn.Module):
     """Better state-action integration"""

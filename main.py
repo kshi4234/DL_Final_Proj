@@ -83,39 +83,27 @@ def train_model(device):
     model = JEPAModel(device=device)
     model.to(device)
 
+    # Better optimizer configuration
     optimizer = torch.optim.AdamW([
-        {"params": model.online_encoder.parameters(), "lr": 1e-4},
-        {"params": model.predictor.parameters(), "lr": 1e-4}
-    ], weight_decay=0.05)
+        {"params": model.online_encoder.parameters(), "lr": 2e-4},
+        {"params": model.predictor.parameters(), "lr": 2e-4}
+    ], weight_decay=0.1, betas=(0.9, 0.999))
 
-    # 使用OneCycleLR学习率调度
+    # Cosine annealing with warmup
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=1e-3,
+        max_lr=[2e-4, 2e-4],
         epochs=30,
         steps_per_epoch=len(train_loader),
-        pct_start=0.3
+        pct_start=0.1,
+        anneal_strategy='cos'
     )
 
-    # Increase training epochs
-    num_epochs = 10
-    
-    # Warmup learning rate
-    warmup_epochs = 2
-    warmup_lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-        optimizer, 
-        start_factor=0.01,
-        total_iters=warmup_epochs * len(train_loader)
-    )
-    
-    # Main scheduler after warmup
-    main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=(num_epochs - warmup_epochs) * len(train_loader)
-    )
-    
-    # EMA update strength
-    ema_decay = 0.996
+    # Add gradient clipping
+    grad_clip = 1.0
+    scaler = torch.cuda.amp.GradScaler()
+
+    num_epochs = 1
     
     for epoch in range(num_epochs):
         model.train()
@@ -125,18 +113,23 @@ def train_model(device):
             states = batch.states
             actions = batch.actions
 
+            # Apply data augmentation
+            states = apply_augmentation(states)
+
             optimizer.zero_grad()
-            predictions, online_states, target_states = model(states, actions)
             
-            # 计算损失
-            loss = compute_loss(predictions[:, 1:], target_states[:, 1:], online_states)
+            # Use mixed precision training
+            with torch.cuda.amp.autocast():
+                predictions, online_states, target_states = model(states, actions)
+                loss = compute_loss(predictions[:, 1:], target_states[:, 1:], online_states)
+
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
             
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
             scheduler.step()
-            
-            # 更新目标编码器
             model.update_target_encoder()
 
             total_loss += loss.item()
@@ -154,28 +147,51 @@ def train_model(device):
     torch.save(model.state_dict(), 'jepa_model.pth')
     return model
 
+def apply_augmentation(states):
+    """Apply data augmentation to states"""
+    B, T, C, H, W = states.shape
+    states = states.view(-1, C, H, W)
+    
+    # Random horizontal flip
+    if torch.rand(1) > 0.5:
+        states = torch.flip(states, [3])
+    
+    # Random rotation
+    angle = torch.randint(-15, 15, (1,)).item()
+    states = torch.nn.functional.rotate(states, angle)
+    
+    # Random brightness and contrast
+    brightness = 0.8 + 0.4 * torch.rand(1)
+    contrast = 0.8 + 0.4 * torch.rand(1)
+    states = torch.clamp(states * contrast + brightness, 0, 1)
+    
+    return states.view(B, T, C, H, W)
+
 def compute_loss(pred_states, target_states, online_states=None):
-    """计算损失"""
-    # L2距离在归一化空间
+    """Improved loss computation"""
+    # Normalized L2 distance
     pred_norm = F.normalize(pred_states, dim=-1)
     target_norm = F.normalize(target_states, dim=-1)
     prediction_loss = F.mse_loss(pred_norm, target_norm)
     
-    # 余弦相似度损失
-    cos_sim = F.cosine_similarity(pred_states, target_states, dim=-1).mean()
-    cos_loss = 1 - cos_sim
+    # InfoNCE loss
+    temperature = 0.1
+    pos_sim = F.cosine_similarity(pred_states, target_states, dim=-1)
+    neg_sim = torch.matmul(pred_states, target_states.transpose(1, 2))
+    pos_sim = torch.exp(pos_sim / temperature)
+    neg_sim = torch.exp(neg_sim / temperature).sum(dim=-1)
+    nce_loss = -torch.log(pos_sim / (neg_sim + 1e-8)).mean()
     
-    # 组合损失
-    evaluate_model(device, model, probe_train_ds, probe_val_ds)
-    total_loss = prediction_loss + cos_loss
-    
+    # Temporal smoothness
     if online_states is not None:
-        # 添加状态连续性约束
-        state_diff = online_states[:, 1:] - online_states[:, :-1]
-        consistency_loss = torch.mean(torch.abs(state_diff))
-        total_loss = total_loss + 0.1 * consistency_loss
-        
-    return total_loss
+        smoothness_loss = F.mse_loss(
+            online_states[:, 1:] - online_states[:, :-1],
+            torch.zeros_like(online_states[:, 1:])
+        )
+    else:
+        smoothness_loss = 0
+    
+    return prediction_loss + 0.1 * nce_loss + 0.01 * smoothness_loss
 
 
 if __name__ == "__main__":

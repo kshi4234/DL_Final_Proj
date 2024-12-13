@@ -25,30 +25,11 @@ class WallDataset:
         else:
             self.locations = None
 
-    def _augment_state(self, state):
-        """Add data augmentation"""
-        # Random horizontal/vertical flip
-        if torch.rand(1) < 0.5:
-            state = torch.flip(state, [-1])
-        if torch.rand(1) < 0.5:
-            state = torch.flip(state, [-2])
-            
-        # Random rotation (90, 180, 270 degrees)
-        k = torch.randint(0, 4, (1,))
-        state = torch.rot90(state, k, [-2, -1])
-        
-        # Random brightness/contrast
-        state = state * (0.8 + 0.4 * torch.rand(1))
-        
-        return state
-
     def __len__(self):
         return len(self.states)
 
     def __getitem__(self, i):
         states = torch.from_numpy(self.states[i]).float().to(self.device)
-        if self.training:
-            states = self._augment_state(states)
         actions = torch.from_numpy(self.actions[i]).float().to(self.device)
 
         if self.locations is not None:
