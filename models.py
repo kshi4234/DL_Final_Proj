@@ -112,13 +112,18 @@ class Predictor(nn.Module):
         return self.mlp(x)
 
 class JEPAModel(nn.Module):
+<<<<<<< HEAD
     def __init__(self, device="cuda", repr_dim=256, action_dim=2, momentum=0.999):
+=======
+    def __init__(self, device="cuda", repr_dim=512, proj_dim=256, action_dim=2, momentum=0.996):
+>>>>>>> 950ed6e (new)
         super().__init__()
         self.device = device
         self.repr_dim = repr_dim
         self.action_dim = action_dim
-        self.momentum = momentum
+        self.momentum = momentum  # 提高momentum以获得更稳定的目标表示
 
+<<<<<<< HEAD
         self.encoder = Encoder(repr_dim=repr_dim).to(device)
         self.target_encoder = Encoder(repr_dim=repr_dim).to(device)
         self.predictor = Predictor(repr_dim, action_dim).to(device)
@@ -132,82 +137,164 @@ class JEPAModel(nn.Module):
     def update_target_encoder(self):
         for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
             param_k.data = param_k.data * self.momentum + param_q.data * (1.0 - self.momentum)
+=======
+        # 增强编码器网络
+        self.online_encoder = nn.Sequential(
+            nn.Conv2d(2, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(256, repr_dim),
+            nn.LayerNorm(repr_dim)
+        ).to(device)
+
+        # 增强投影器网络
+        self.online_projector = nn.Sequential(
+            nn.Linear(repr_dim, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.ReLU(),
+            nn.Linear(proj_dim, proj_dim),
+            nn.LayerNorm(proj_dim)
+        ).to(device)
+
+        # 简化预测器以减少过拟合
+        self.online_predictor = nn.Sequential(
+            nn.Linear(proj_dim, proj_dim),
+            nn.LayerNorm(proj_dim),
+            nn.ReLU(),
+            nn.Linear(proj_dim, proj_dim),
+            nn.LayerNorm(proj_dim)
+        ).to(device)
+
+        # 动作预测器
+        self.predictor = nn.Sequential(
+            nn.Linear(repr_dim + action_dim, repr_dim),
+            nn.LayerNorm(repr_dim),
+            nn.ReLU(),
+            nn.Linear(repr_dim, repr_dim),
+            nn.LayerNorm(repr_dim),
+            nn.ReLU(),
+            nn.Linear(repr_dim, repr_dim),
+            nn.LayerNorm(repr_dim)
+        ).to(device)
+
+        # 创建目标网络
+        self.target_encoder = copy.deepcopy(self.online_encoder)
+        self.target_projector = copy.deepcopy(self.online_projector)
+        
+        # 冻结目标网络参数
+        for param in self.target_encoder.parameters():
+            param.requires_grad = False
+        for param in self.target_projector.parameters():
+            param.requires_grad = False
+
+    @torch.no_grad()
+    def update_target_encoder(self):
+        tau = 1 - self.momentum  # 使用更高的momentum值
+        for online_params, target_params in zip(self.online_encoder.parameters(), self.target_encoder.parameters()):
+            target_params.data.mul_(self.momentum).add_(tau * online_params.data)
+        for online_params, target_params in zip(self.online_projector.parameters(), self.target_projector.parameters()):
+            target_params.data.mul_(self.momentum).add_(tau * online_params.data)
+>>>>>>> 950ed6e (new)
 
     def forward(self, states, actions):
-        """
-        Args:
-            During training:
-                states: [B, T, Ch, H, W]
-            During inference:
-                states: [B, 1, Ch, H, W]
-            actions: [B, T-1, 2]
-
-        Output:
-            predictions: [B, T, D]
-        """
         B, T, C, H, W = states.shape
         device = states.device
 
         predictions = []
+<<<<<<< HEAD
         if self.training:
             # Encode all states
             state_reprs = self.encoder(states.view(B * T, C, H, W)).view(B, T, -1)  # [B, T, D]
+=======
+        online_preds = []
+        targets = []
 
-            # Initial state representation
-            current_repr = state_reprs[:, 0]  # [B, D]
+        if self.training:
+            # 编码所有状态并应用BYOL
+            state_reprs = self.online_encoder(states.view(B * T, C, H, W))
+            state_reprs = state_reprs.view(B, T, -1)  # [B, T, D]
+            
+            # BYOL投影和预测
+            online_preds = self.online_projector(state_reprs)
+            online_preds = self.online_predictor(online_preds)
+            
+            with torch.no_grad():
+                target_reprs = self.target_encoder(states.view(B * T, C, H, W))
+                target_reprs = target_reprs.view(B, T, -1)
+                targets = self.target_projector(target_reprs)
+>>>>>>> 950ed6e (new)
 
-            predictions.append(current_repr.unsqueeze(1))  # [B, 1, D]
+            # 当前状态表示
+            current_repr = state_reprs[:, 0]
+            predictions.append(current_repr.unsqueeze(1))
 
+            # 预测未来状态
             for t in range(T - 1):
-                action = actions[:, t]  # [B, action_dim]
-                # Predict next representation
-                pred_repr = self.predictor(current_repr, action)  # [B, D]
-                predictions.append(pred_repr.unsqueeze(1))  # [B, 1, D]
-                # Update current representation with the actual next state representation
-                current_repr = state_reprs[:, t + 1]  # Use actual next state representation
+                action = actions[:, t]
+                pred_repr = self.predictor(torch.cat([current_repr, action], dim=-1))
+                predictions.append(pred_repr.unsqueeze(1))
+                current_repr = state_reprs[:, t + 1]
+
         else:
+<<<<<<< HEAD
             # Inference mode
             current_repr = self.encoder(states[:, 0])  # [B, D]
             predictions.append(current_repr.unsqueeze(1))  # [B, 1, D]
+=======
+            # 推理模式
+            current_repr = self.online_encoder(states[:, 0])
+            predictions.append(current_repr.unsqueeze(1))
+>>>>>>> 950ed6e (new)
 
             for t in range(T - 1):
                 action = actions[:, t]
-                pred_repr = self.predictor(current_repr, action)
+                pred_repr = self.predictor(torch.cat([current_repr, action], dim=-1))
                 predictions.append(pred_repr.unsqueeze(1))
-                current_repr = pred_repr  # Update current representation with prediction
+                current_repr = pred_repr
 
-        predictions = torch.cat(predictions, dim=1)  # [B, T, D]
-
+<<<<<<< HEAD
         return predictions
+=======
+        predictions = torch.cat(predictions, dim=1)
+        return predictions, online_preds, targets
+>>>>>>> 950ed6e (new)
 
     def predict_future(self, init_states, actions):
-        """
-        Unroll the model to predict future representations.
-
-        Args:
-            init_states: [B, 1, Ch, H, W]
-            actions: [B, T-1, 2]
-
-        Returns:
-            predicted_reprs: [T, B, D]
-        """
         B, _, C, H, W = init_states.shape
-        T_minus1 = actions.shape[1]
+        T_minus1 = actions.shape[1] 
         T = T_minus1 + 1
-
+        
         predicted_reprs = []
+<<<<<<< HEAD
 
         #initial state
         current_repr = self.encoder(init_states[:, 0])  # [B, D]
         predicted_reprs.append(current_repr.unsqueeze(0))  # [1, B, D]
 
+=======
+        
+        # 初始状态
+        current_repr = self.online_encoder(init_states[:, 0])
+        predicted_reprs.append(current_repr.unsqueeze(0))
+        
+        # 预测未来状态
+>>>>>>> 950ed6e (new)
         for t in range(T_minus1):
-            action = actions[:, t]  # [B, action_dim]
-            # Predict next representation
-            pred_repr = self.predictor(current_repr, action)  # [B, D]
-            predicted_reprs.append(pred_repr.unsqueeze(0))  # [1, B, D]
-            # Update current representation for next step
+            action = actions[:, t]
+            pred_repr = self.predictor(torch.cat([current_repr, action], dim=-1))
+            predicted_reprs.append(pred_repr.unsqueeze(0))
             current_repr = pred_repr
-
-        predicted_reprs = torch.cat(predicted_reprs, dim=0)  # [T, B, D]
+            
+        predicted_reprs = torch.cat(predicted_reprs, dim=0)
         return predicted_reprs

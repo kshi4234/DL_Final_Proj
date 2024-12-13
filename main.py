@@ -80,7 +80,7 @@ def je_loss(predictions, targets):
     return loss
 
 def train_model(device):
-    # Load training data
+    # 加载训练数据
     train_loader = create_wall_dataloader(
         data_path="/scratch/DL24FA/train",
         probing=False,
@@ -91,69 +91,68 @@ def train_model(device):
     model = JEPAModel(device=device)
     model.to(device)
 
-    optimizer = torch.optim.Adam(
-        list(model.encoder.parameters()) + list(model.predictor.parameters()),
-        lr=1e-3
-    )
+    # 使用AdamW优化器并添加权重衰减
+    optimizer = torch.optim.AdamW([
+        {"params": model.online_encoder.parameters(), "lr": 1e-4, "weight_decay": 0.05},
+        {"params": model.online_projector.parameters(), "lr": 1e-4, "weight_decay": 0.05},
+        {"params": model.online_predictor.parameters(), "lr": 1e-4, "weight_decay": 0.05},
+        {"params": model.predictor.parameters(), "lr": 1e-4, "weight_decay": 0.05},
+    ])
 
+    # 添加学习率调度器
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+    
     num_epochs = 1
+    best_val_loss = float('inf')
+    
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
-        for batch_idx, batch in enumerate(tqdm(train_loader, desc=f"Training Epoch {epoch+1}")):
-            states = batch.states  # [B, T, C, H, W]
-            actions = batch.actions  # [B, T-1, action_dim]
+        
+        with tqdm(train_loader, desc=f"Training Epoch {epoch+1}") as bar:
+            for batch_idx, batch in enumerate(bar):
+                states = batch.states
+                actions = batch.actions
 
-            optimizer.zero_grad()
-            predictions = model(states, actions)  # [B, T, D]
+                optimizer.zero_grad()
+                predictions, online_preds, targets = model(states, actions)
 
-            # Compute target representations using the target encoder
-            with torch.no_grad():
-                targets = model.target_encoder(
-                    states.view(-1, *states.shape[2:])
-                ).view(states.size(0), states.size(1), -1)  # [B, T, D]
+                # 计算BYOL损失
+                byol_loss = 1 - F.cosine_similarity(online_preds, targets.detach(), dim=-1).mean()
+                
+                # 计算预测损失
+                with torch.no_grad():
+                    target_reps = model.target_encoder(
+                        states.view(-1, *states.shape[2:])
+                    ).view(states.size(0), states.size(1), -1)
+                
+                pred_loss = F.smooth_l1_loss(predictions[:, 1:], target_reps[:, 1:])
+                
+                # 总损失
+                loss = byol_loss + pred_loss
+                
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
 
-            # Compute loss between predictions[:, 1:] and targets[:, 1:]
-            loss = je_loss(predictions[:, 1:], targets[:, 1:])
+                # 更新目标编码器
+                model.update_target_encoder()
 
-            #print(f"Predictions mean: {predictions.mean().item():.8e}, std: {predictions.std().item():.8e}")
-            #print(f"Targets mean: {targets.mean().item():.8e}, std: {targets.std().item():.8e}")
-            loss.backward()
-            optimizer.step()
-
-            # Update target encoder
-            model.update_target_encoder()
-
-            total_loss += loss.item()
-
-
-            #print(f"Batch {batch_idx}, Loss: {loss.item():.8e}")
+                total_loss += loss.item()
+                bar.set_postfix(batch_num=batch_idx, loss=loss.item(), 
+                              byol_loss=byol_loss.item(), pred_loss=pred_loss.item())
 
         avg_loss = total_loss / len(train_loader)
-        print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.8e}")
+        print(f"Epoch [{epoch+1}/{num_epochs}], Avg Loss: {avg_loss:.8e}")
+        
+        # 更新学习率
+        scheduler.step()
+        
 
-        # Optionally evaluate the model
-        if (epoch + 1) % 2 == 0:
-            evaluate_current_model(model, device)
-
-    # Save the trained model
-    torch.save(model.state_dict(), 'jepa_model.pth')
+    # 保存最终模型
+    torch.save(model.state_dict(), 'final_jepa_model.pth')
 
 
-def evaluate_current_model(model, device):
-    probe_train_ds, probe_val_ds = load_data(device)
-    evaluator = ProbingEvaluator(
-        device=device,
-        model=model,
-        probe_train_ds=probe_train_ds,
-        probe_val_ds=probe_val_ds,
-        quick_debug=False,
-    )
-
-    prober = evaluator.train_pred_prober()
-    avg_losses = evaluator.evaluate_all(prober=prober)
-    for probe_attr, loss in avg_losses.items():
-        print(f"{probe_attr} loss: {loss}")
 
 
 if __name__ == "__main__":
