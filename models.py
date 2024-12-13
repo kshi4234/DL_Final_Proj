@@ -4,7 +4,8 @@ from torch import nn
 from torch.nn import functional as F
 import torch
 import torch.nn.functional as F
-
+from encs import ResNet, build_resnet
+from preds import ResPredictor, RNNPredictor
 
 def build_mlp(layers_dims: List[int]):
     layers = []
@@ -140,10 +141,10 @@ class JEPAModel(nn.Module):
         self.action_dim = action_dim
         self.momentum = momentum
 
-        self.online_encoder = Encoder(repr_dim=repr_dim).to(device)
+        self.online_encoder = build_resnet().to(device)
         self.online_projector = Projector(projected_dim=proj_dim, repr_dim=repr_dim).to(device)
-        self.online_predictor = OnlinePredictor(projected_dim=proj_dim)
-        self.target_encoder = Encoder(repr_dim=repr_dim).to(device)
+        self.online_predictor = ResPredictor().to(device)
+        self.target_encoder = build_resnet().to(device)
         self.target_projector = Projector(projected_dim=proj_dim, repr_dim=repr_dim).to(device)
         # Target encoder does not require backprop for BYOL; freeze target encoder parameters
         for param in self.target_encoder.parameters():
