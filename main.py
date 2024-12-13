@@ -97,7 +97,25 @@ def train_model(device):
         pct_start=0.3
     )
 
-    num_epochs = 1
+    # Increase training epochs
+    num_epochs = 10
+    
+    # Warmup learning rate
+    warmup_epochs = 2
+    warmup_lr_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, 
+        start_factor=0.01,
+        total_iters=warmup_epochs * len(train_loader)
+    )
+    
+    # Main scheduler after warmup
+    main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=(num_epochs - warmup_epochs) * len(train_loader)
+    )
+    
+    # EMA update strength
+    ema_decay = 0.996
     
     for epoch in range(num_epochs):
         model.train()
@@ -148,6 +166,7 @@ def compute_loss(pred_states, target_states, online_states=None):
     cos_loss = 1 - cos_sim
     
     # 组合损失
+    evaluate_model(device, model, probe_train_ds, probe_val_ds)
     total_loss = prediction_loss + cos_loss
     
     if online_states is not None:
