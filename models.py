@@ -125,129 +125,154 @@ def energy_distance(pred_state, target_state):
     return distance
 
 class JEPAModel(nn.Module):
-    def __init__(self, device="cuda", repr_dim=256, momentum=0.99):
+    def __init__(self, device="cuda", repr_dim=128, action_dim=2, momentum=0.99):
         super().__init__()
         self.device = device
         self.repr_dim = repr_dim
         self.momentum = momentum
-        
-        # 编码器网络 - 使用残差连接增强特征提取
+
+        # Encoder with spatial attention
         self.online_encoder = nn.Sequential(
-            nn.Conv2d(2, 64, kernel_size=3, stride=2, padding=1),
+            # Initial convolution
+            nn.Conv2d(2, 32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            
+            # First spatial attention block
+            SpatialAttentionBlock(32),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
-            ResidualBlock(64, 64),
+            
+            # Second spatial attention block
+            SpatialAttentionBlock(64),
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            ResidualBlock(128, 128),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            ResidualBlock(256, 256),
+            
+            # Final processing
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
-            nn.Linear(256, repr_dim),
+            nn.Linear(128, repr_dim),
             nn.LayerNorm(repr_dim)
         ).to(device)
-        
-        # 预测器网络 - 用于预测下一个状态表示
+
+        # Predictor with stronger state-action fusion
         self.predictor = nn.Sequential(
-            nn.Linear(repr_dim + 2, repr_dim),  # +2 for action
-            nn.LayerNorm(repr_dim),
-            nn.ReLU(),
+            StateActionFusion(repr_dim, action_dim),
             nn.Linear(repr_dim, repr_dim),
             nn.LayerNorm(repr_dim),
             nn.ReLU(),
             nn.Linear(repr_dim, repr_dim),
             nn.LayerNorm(repr_dim)
         ).to(device)
-        
-        # 目标编码器
+
+        # Target networks
         self.target_encoder = copy.deepcopy(self.online_encoder)
         for param in self.target_encoder.parameters():
             param.requires_grad = False
-            
-    def compute_system_energy(self, states, actions):
-        """
-        计算整个观察-动作序列的系统能量
-        """
-        B, T, C, H, W = states.shape
-        
-        # 获取所有状态的目标表示
-        with torch.no_grad():
-            target_states = self.target_encoder(
-                states.view(-1, C, H, W)
-            ).view(B, T, -1)
-        
-        # 获取初始状态表示
-        current_state = self.online_encoder(states[:, 0])
-        total_energy = 0
-        predictions = [current_state]
-        
-        # 计算每个时间步的能量
-        for t in range(T-1):
-            # 预测下一个状态
-            action = actions[:, t]
-            pred_next_state = self.predictor(
-                torch.cat([current_state, action], dim=-1)
-            )
-            predictions.append(pred_next_state)
-            
-            # 计算与目标状态的距离
-            energy = energy_distance(pred_next_state, target_states[:, t+1])
-            total_energy = total_energy + energy.mean()
-            
-            # 更新当前状态
-            if self.training:
-                current_state = self.online_encoder(states[:, t+1])
-            else:
-                current_state = pred_next_state
-                
-        predictions = torch.stack(predictions, dim=1)
-        return total_energy / (T-1), predictions
 
     def forward(self, states, actions):
-        """
-        前向传播，返回系统能量和预测序列
-        """
-        energy, predictions = self.compute_system_energy(states, actions)
-        return energy, predictions
+        """Forward pass with better state-action integration"""
+        B, T, C, H, W = states.shape
         
+        # Get all encodings
+        online_states = self.online_encoder(states.view(-1, C, H, W)).view(B, T, -1)
+        with torch.no_grad():
+            target_states = self.target_encoder(states.view(-1, C, H, W)).view(B, T, -1)
+        
+        # Prepare predictions
+        predictions = []
+        current_state = online_states[:, 0]
+        predictions.append(current_state.unsqueeze(1))
+        
+        # Generate predictions
+        for t in range(T-1):
+            action = actions[:, t]
+            pred_next = self.predictor(StateActionPair(current_state, action))
+            predictions.append(pred_next.unsqueeze(1))
+            
+            if self.training:
+                current_state = online_states[:, t+1]
+            else:
+                current_state = pred_next
+        
+        predictions = torch.cat(predictions, dim=1)
+        return predictions, online_states, target_states
+
+    def predict_future(self, init_states, actions):
+        """
+        Predict future states given initial states and actions sequence
+        Args:
+            init_states: [B, 1, Ch, H, W] - Initial states
+            actions: [B, T-1, action_dim] - Sequence of actions
+            
+        Returns:
+            predicted_states: [T, B, D] - Predicted state representations 
+        """
+        B, _, C, H, W = init_states.shape
+        T_minus1 = actions.shape[1]
+        T = T_minus1 + 1
+        
+        # Get initial state representation
+        initial_repr = self.online_encoder(init_states[:, 0])  # [B, D]
+        predicted_reprs = [initial_repr.unsqueeze(0)]  # List to store all predictions
+        
+        # Current state for unrolling
+        current_repr = initial_repr
+        
+        # Predict future states autoregressively
+        for t in range(T_minus1):
+            action = actions[:, t]  # [B, action_dim]
+            # Predict next state representation
+            next_repr = self.predictor(StateActionPair(current_repr, action))  # [B, D]
+            predicted_reprs.append(next_repr.unsqueeze(0))  # Add to predictions
+            # Update current state for next iteration
+            current_repr = next_repr
+        
+        # Stack all predictions
+        predicted_reprs = torch.cat(predicted_reprs, dim=0)  # [T, B, D]
+        return predicted_reprs
+
     @torch.no_grad()
     def update_target_encoder(self):
-        """
-        更新目标编码器的参数
-        """
         tau = 1 - self.momentum
         for online_params, target_params in zip(
             self.online_encoder.parameters(), 
             self.target_encoder.parameters()
         ):
-            target_params.data.mul_(self.momentum).add_(
-                tau * online_params.data
-            )
-            
-    def predict_future(self, init_states, actions):
-        """
-        预测未来状态序列
-        """
-        B, _, C, H, W = init_states.shape
-        T = actions.shape[1] + 1
-        
-        predictions = []
-        current_state = self.online_encoder(init_states[:, 0])
-        predictions.append(current_state.unsqueeze(0))
-        
-        for t in range(T-1):
-            action = actions[:, t]
-            pred_next = self.predictor(
-                torch.cat([current_state, action], dim=-1)
-            )
-            predictions.append(pred_next.unsqueeze(0))
-            current_state = pred_next
-            
-        return torch.cat(predictions, dim=0)
+            target_params.data.mul_(self.momentum).add_(tau * online_params.data)
+
+# Helper classes remain the same
+class SpatialAttentionBlock(nn.Module):
+    """Spatial attention mechanism to focus on important regions"""
+    def __init__(self, channels):
+        super().__init__()
+        self.conv_spatial = nn.Conv2d(channels, 1, kernel_size=7, padding=3)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        attention = self.sigmoid(self.conv_spatial(x))
+        return x * attention
+
+class StateActionFusion(nn.Module):
+    """Better state-action integration"""
+    def __init__(self, repr_dim, action_dim):
+        super().__init__()
+        self.state_proj = nn.Linear(repr_dim, repr_dim)
+        self.action_proj = nn.Linear(action_dim, repr_dim)
+        self.fusion = nn.Sequential(
+            nn.Linear(repr_dim * 2, repr_dim),
+            nn.LayerNorm(repr_dim),
+            nn.ReLU()
+        )
+
+    def forward(self, state_action_pair):
+        state, action = state_action_pair
+        state_feat = self.state_proj(state)
+        action_feat = self.action_proj(action)
+        combined = torch.cat([state_feat, action_feat], dim=-1)
+        return self.fusion(combined)
 
 class ResidualBlock(nn.Module):
     """残差块用于增强特征提取"""

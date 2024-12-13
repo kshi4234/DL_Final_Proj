@@ -71,98 +71,98 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
     for probe_attr, loss in avg_losses.items():
         print(f"{probe_attr} loss: {loss}")
 
+def compute_loss(pred_states, target_states, online_states=None):
+    """Improved loss computation"""
+    # L2 distance in normalized space
+    pred_norm = F.normalize(pred_states, dim=-1)
+    target_norm = F.normalize(target_states, dim=-1)
+    prediction_loss = F.mse_loss(pred_norm, target_norm)
+    
+    # Cosine similarity loss
+    cos_sim = F.cosine_similarity(pred_states, target_states, dim=-1).mean()
+    cos_loss = 1 - cos_sim
+    
+    # Combine losses
+    total_loss = prediction_loss + cos_loss
+    
+    if online_states is not None:
+        # Add consistency loss between consecutive states
+        state_diff = online_states[:, 1:] - online_states[:, :-1]
+        consistency_loss = torch.mean(torch.abs(state_diff))
+        total_loss = total_loss + 0.1 * consistency_loss
+        
+    return total_loss
+
 def train_model(device):
-    # 数据加载器
     train_loader = create_wall_dataloader(
         data_path="/scratch/DL24FA/train",
         probing=False,
         device=device,
-        batch_size=32,  # 减小batch size以增加更新频率
+        batch_size=64,
         train=True,
     )
 
     model = JEPAModel(device=device)
     model.to(device)
 
-    # 使用AdamW优化器
     optimizer = torch.optim.AdamW([
-        {"params": model.online_encoder.parameters(), "lr": 2e-4},
-        {"params": model.predictor.parameters(), "lr": 2e-4},
-    ], weight_decay=0.01)
+        {"params": model.online_encoder.parameters(), "lr": 1e-4},
+        {"params": model.predictor.parameters(), "lr": 1e-4}
+    ], weight_decay=0.05)
 
-    # 余弦退火学习率调度器
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=20, eta_min=1e-6
+    # Cyclic learning rate for better optimization
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=1e-3,
+        epochs=30,
+        steps_per_epoch=len(train_loader),
+        pct_start=0.3
     )
-    
-    num_epochs = 20
-    best_energy = float('inf')
-    
+
+    num_epochs = 30
+    best_val_loss = float('inf')
+
     for epoch in range(num_epochs):
         model.train()
-        total_energy = 0
+        total_loss = 0
         
         with tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}") as pbar:
             for batch_idx, batch in enumerate(pbar):
                 states = batch.states
                 actions = batch.actions
 
+                # Forward pass with gradient computation
                 optimizer.zero_grad()
+                predictions, online_states, target_states = model(states, actions)
                 
-                # 计算系统能量
-                energy, _ = model(states, actions)
+                # Compute loss
+                loss = compute_loss(predictions[:, 1:], target_states[:, 1:], online_states)
                 
-                # 反向传播
-                energy.backward()
-                
-                # 梯度裁剪
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), max_norm=1.0
-                )
-                
+                # Backward pass
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
+                scheduler.step()
                 
-                # 更新目标编码器
+                # Update target network
                 model.update_target_encoder()
 
-                total_energy += energy.item()
+                total_loss += loss.item()
                 pbar.set_postfix(
-                    energy=energy.item(),
-                    avg_energy=total_energy/(batch_idx+1)
+                    loss=loss.item(),
+                    lr=optimizer.param_groups[0]['lr']
                 )
 
-        # 更新学习率
-        scheduler.step()
+        # Validate after each epoch
+        val_loss = evaluate_model(model, device)
+        print(f"Epoch {epoch+1} - Train Loss: {total_loss/len(train_loader):.4f}, Val Loss: {val_loss:.4f}")
         
-        # 每轮结束后评估
-        #val_energy = evaluate_model(model, device)
-        #print(f"Validation Energy: {val_energy:.4f}")
-        
-        # 保存最佳模型
-        # if val_energy < best_energy:
-        #     best_energy = val_energy
-        #     torch.save(model.state_dict(), 'best_jepa_model.pth')
-        #     print(f"Saved best model with energy: {best_energy:.4f}")
+        # Save best model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), 'best_jepa_model.pth')
 
-    # 保存最终模型
-    torch.save(model.state_dict(), 'final_jepa_model.pth')
     return model
-
-# def evaluate_model(model, device):
-#     """评估模型性能"""
-#     model.eval()
-#     probe_train_ds, probe_val_ds = load_data(device)
-    
-#     total_energy = 0
-#     num_batches = 0
-    
-#     with torch.no_grad():
-#         for batch in probe_val_ds['normal']:
-#             energy, _ = model(batch.states, batch.actions)
-#             total_energy += energy.item()
-#             num_batches += 1
-            
-#     return total_energy / num_batches
 
 
 if __name__ == "__main__":
