@@ -103,6 +103,8 @@ class OnlinePredictor(nn.Module):
     def __init__(self, projected_dim=256):
         super().__init__()
         self.mlp = nn.Sequential(
+            nn.Linear(projected_dim, projected_dim),
+            nn.ReLU(),
             nn.Linear(projected_dim, projected_dim)
         )
 
@@ -114,7 +116,9 @@ class Projector(nn.Module):
     def __init__(self, projected_dim=256, repr_dim=256):
         super().__init__()
         self.mlp = nn.Sequential(
-            nn.Linear(repr_dim, projected_dim)
+            nn.Linear(repr_dim, projected_dim),
+            nn.ReLU(),
+            nn.Linear(projected_dim, projected_dim)
         )
 
     def forward(self, encoder_rep):
