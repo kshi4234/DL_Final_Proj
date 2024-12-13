@@ -97,7 +97,7 @@ def train_model(device):
         pct_start=0.3
     )
 
-    num_epochs = 30
+    num_epochs = 1
     
     for epoch in range(num_epochs):
         model.train()
