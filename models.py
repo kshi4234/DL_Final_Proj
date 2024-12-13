@@ -112,32 +112,13 @@ class Predictor(nn.Module):
         return self.mlp(x)
 
 class JEPAModel(nn.Module):
-<<<<<<< HEAD
-    def __init__(self, device="cuda", repr_dim=256, action_dim=2, momentum=0.999):
-=======
     def __init__(self, device="cuda", repr_dim=512, proj_dim=256, action_dim=2, momentum=0.996):
->>>>>>> 950ed6e (new)
         super().__init__()
         self.device = device
         self.repr_dim = repr_dim
         self.action_dim = action_dim
         self.momentum = momentum  # 提高momentum以获得更稳定的目标表示
 
-<<<<<<< HEAD
-        self.encoder = Encoder(repr_dim=repr_dim).to(device)
-        self.target_encoder = Encoder(repr_dim=repr_dim).to(device)
-        self.predictor = Predictor(repr_dim, action_dim).to(device)
-
-        # Initialize target encoder parameters with encoder parameters
-        for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
-            param_k.data.copy_(param_q.data)
-            param_k.requires_grad = False  # Stop gradients for target encoder
-
-    @torch.no_grad()
-    def update_target_encoder(self):
-        for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
-            param_k.data = param_k.data * self.momentum + param_q.data * (1.0 - self.momentum)
-=======
         # 增强编码器网络
         self.online_encoder = nn.Sequential(
             nn.Conv2d(2, 32, kernel_size=3, stride=2, padding=1),
@@ -205,18 +186,12 @@ class JEPAModel(nn.Module):
             target_params.data.mul_(self.momentum).add_(tau * online_params.data)
         for online_params, target_params in zip(self.online_projector.parameters(), self.target_projector.parameters()):
             target_params.data.mul_(self.momentum).add_(tau * online_params.data)
->>>>>>> 950ed6e (new)
 
     def forward(self, states, actions):
         B, T, C, H, W = states.shape
         device = states.device
 
         predictions = []
-<<<<<<< HEAD
-        if self.training:
-            # Encode all states
-            state_reprs = self.encoder(states.view(B * T, C, H, W)).view(B, T, -1)  # [B, T, D]
-=======
         online_preds = []
         targets = []
 
@@ -233,7 +208,6 @@ class JEPAModel(nn.Module):
                 target_reprs = self.target_encoder(states.view(B * T, C, H, W))
                 target_reprs = target_reprs.view(B, T, -1)
                 targets = self.target_projector(target_reprs)
->>>>>>> 950ed6e (new)
 
             # 当前状态表示
             current_repr = state_reprs[:, 0]
@@ -247,15 +221,9 @@ class JEPAModel(nn.Module):
                 current_repr = state_reprs[:, t + 1]
 
         else:
-<<<<<<< HEAD
-            # Inference mode
-            current_repr = self.encoder(states[:, 0])  # [B, D]
-            predictions.append(current_repr.unsqueeze(1))  # [B, 1, D]
-=======
             # 推理模式
             current_repr = self.online_encoder(states[:, 0])
             predictions.append(current_repr.unsqueeze(1))
->>>>>>> 950ed6e (new)
 
             for t in range(T - 1):
                 action = actions[:, t]
@@ -263,12 +231,8 @@ class JEPAModel(nn.Module):
                 predictions.append(pred_repr.unsqueeze(1))
                 current_repr = pred_repr
 
-<<<<<<< HEAD
-        return predictions
-=======
         predictions = torch.cat(predictions, dim=1)
         return predictions, online_preds, targets
->>>>>>> 950ed6e (new)
 
     def predict_future(self, init_states, actions):
         B, _, C, H, W = init_states.shape
@@ -276,20 +240,12 @@ class JEPAModel(nn.Module):
         T = T_minus1 + 1
         
         predicted_reprs = []
-<<<<<<< HEAD
-
-        #initial state
-        current_repr = self.encoder(init_states[:, 0])  # [B, D]
-        predicted_reprs.append(current_repr.unsqueeze(0))  # [1, B, D]
-
-=======
         
         # 初始状态
         current_repr = self.online_encoder(init_states[:, 0])
         predicted_reprs.append(current_repr.unsqueeze(0))
         
         # 预测未来状态
->>>>>>> 950ed6e (new)
         for t in range(T_minus1):
             action = actions[:, t]
             pred_repr = self.predictor(torch.cat([current_repr, action], dim=-1))
