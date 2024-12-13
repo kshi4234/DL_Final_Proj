@@ -71,88 +71,98 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
     for probe_attr, loss in avg_losses.items():
         print(f"{probe_attr} loss: {loss}")
 
-def je_loss(predictions, targets):
-    #predictions = F.normalize(predictions, dim=-1)
-    #targets = F.normalize(targets, dim=-1)
-    
-    #loss = F.mse_loss(predictions, targets)
-    loss = 1 - F.cosine_similarity(predictions, targets, dim=-1).mean()
-    return loss
-
 def train_model(device):
-    # 加载训练数据
+    # 数据加载器
     train_loader = create_wall_dataloader(
         data_path="/scratch/DL24FA/train",
         probing=False,
         device=device,
+        batch_size=32,  # 减小batch size以增加更新频率
         train=True,
     )
 
     model = JEPAModel(device=device)
     model.to(device)
 
-    # 使用AdamW优化器并添加权重衰减
+    # 使用AdamW优化器
     optimizer = torch.optim.AdamW([
-        {"params": model.online_encoder.parameters(), "lr": 1e-4, "weight_decay": 0.05},
-        {"params": model.online_projector.parameters(), "lr": 1e-4, "weight_decay": 0.05},
-        {"params": model.online_predictor.parameters(), "lr": 1e-4, "weight_decay": 0.05},
-        {"params": model.predictor.parameters(), "lr": 1e-4, "weight_decay": 0.05},
-    ])
+        {"params": model.online_encoder.parameters(), "lr": 2e-4},
+        {"params": model.predictor.parameters(), "lr": 2e-4},
+    ], weight_decay=0.01)
 
-    # 添加学习率调度器
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+    # 余弦退火学习率调度器
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=20, eta_min=1e-6
+    )
     
-    num_epochs = 1
-    best_val_loss = float('inf')
+    num_epochs = 20
+    best_energy = float('inf')
     
     for epoch in range(num_epochs):
         model.train()
-        total_loss = 0
+        total_energy = 0
         
-        with tqdm(train_loader, desc=f"Training Epoch {epoch+1}") as bar:
-            for batch_idx, batch in enumerate(bar):
+        with tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}") as pbar:
+            for batch_idx, batch in enumerate(pbar):
                 states = batch.states
                 actions = batch.actions
 
                 optimizer.zero_grad()
-                predictions, online_preds, targets = model(states, actions)
-
-                # 计算BYOL损失
-                byol_loss = 1 - F.cosine_similarity(online_preds, targets.detach(), dim=-1).mean()
                 
-                # 计算预测损失
-                with torch.no_grad():
-                    target_reps = model.target_encoder(
-                        states.view(-1, *states.shape[2:])
-                    ).view(states.size(0), states.size(1), -1)
+                # 计算系统能量
+                energy, _ = model(states, actions)
                 
-                pred_loss = F.smooth_l1_loss(predictions[:, 1:], target_reps[:, 1:])
+                # 反向传播
+                energy.backward()
                 
-                # 总损失
-                loss = byol_loss + pred_loss
+                # 梯度裁剪
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=1.0
+                )
                 
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
-
+                
                 # 更新目标编码器
                 model.update_target_encoder()
 
-                total_loss += loss.item()
-                bar.set_postfix(batch_num=batch_idx, loss=loss.item(), 
-                              byol_loss=byol_loss.item(), pred_loss=pred_loss.item())
+                total_energy += energy.item()
+                pbar.set_postfix(
+                    energy=energy.item(),
+                    avg_energy=total_energy/(batch_idx+1)
+                )
 
-        avg_loss = total_loss / len(train_loader)
-        print(f"Epoch [{epoch+1}/{num_epochs}], Avg Loss: {avg_loss:.8e}")
-        
         # 更新学习率
         scheduler.step()
         
+        # 每轮结束后评估
+        #val_energy = evaluate_model(model, device)
+        #print(f"Validation Energy: {val_energy:.4f}")
+        
+        # 保存最佳模型
+        # if val_energy < best_energy:
+        #     best_energy = val_energy
+        #     torch.save(model.state_dict(), 'best_jepa_model.pth')
+        #     print(f"Saved best model with energy: {best_energy:.4f}")
 
     # 保存最终模型
     torch.save(model.state_dict(), 'final_jepa_model.pth')
+    return model
 
-
+# def evaluate_model(model, device):
+#     """评估模型性能"""
+#     model.eval()
+#     probe_train_ds, probe_val_ds = load_data(device)
+    
+#     total_energy = 0
+#     num_batches = 0
+    
+#     with torch.no_grad():
+#         for batch in probe_val_ds['normal']:
+#             energy, _ = model(batch.states, batch.actions)
+#             total_energy += energy.item()
+#             num_batches += 1
+            
+#     return total_energy / num_batches
 
 
 if __name__ == "__main__":

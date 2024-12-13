@@ -111,55 +111,49 @@ class Predictor(nn.Module):
         x = torch.cat([repr, action], dim=-1)
         return self.mlp(x)
 
+def energy_distance(pred_state, target_state):
+    """
+    计算预测状态和目标状态之间的能量距离
+    使用负余弦相似度作为距离度量
+    """
+    # 归一化向量
+    pred_norm = F.normalize(pred_state, p=2, dim=-1)
+    target_norm = F.normalize(target_state, p=2, dim=-1)
+    
+    # 计算余弦相似度并转换为距离
+    distance = 1 - F.cosine_similarity(pred_norm, target_norm, dim=-1)
+    return distance
+
 class JEPAModel(nn.Module):
-    def __init__(self, device="cuda", repr_dim=512, proj_dim=256, action_dim=2, momentum=0.996):
+    def __init__(self, device="cuda", repr_dim=256, momentum=0.99):
         super().__init__()
         self.device = device
         self.repr_dim = repr_dim
-        self.action_dim = action_dim
-        self.momentum = momentum  # 提高momentum以获得更稳定的目标表示
-
-        # 增强编码器网络
+        self.momentum = momentum
+        
+        # 编码器网络 - 使用残差连接增强特征提取
         self.online_encoder = nn.Sequential(
-            nn.Conv2d(2, 32, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(2, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(),
+            ResidualBlock(64, 64),
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(),
+            ResidualBlock(128, 128),
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(256),
             nn.ReLU(),
+            ResidualBlock(256, 256),
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
             nn.Linear(256, repr_dim),
             nn.LayerNorm(repr_dim)
         ).to(device)
-
-        # 增强投影器网络
-        self.online_projector = nn.Sequential(
-            nn.Linear(repr_dim, proj_dim),
-            nn.LayerNorm(proj_dim),
-            nn.ReLU(),
-            nn.Linear(proj_dim, proj_dim),
-            nn.LayerNorm(proj_dim)
-        ).to(device)
-
-        # 简化预测器以减少过拟合
-        self.online_predictor = nn.Sequential(
-            nn.Linear(proj_dim, proj_dim),
-            nn.LayerNorm(proj_dim),
-            nn.ReLU(),
-            nn.Linear(proj_dim, proj_dim),
-            nn.LayerNorm(proj_dim)
-        ).to(device)
-
-        # 动作预测器
+        
+        # 预测器网络 - 用于预测下一个状态表示
         self.predictor = nn.Sequential(
-            nn.Linear(repr_dim + action_dim, repr_dim),
+            nn.Linear(repr_dim + 2, repr_dim),  # +2 for action
             nn.LayerNorm(repr_dim),
             nn.ReLU(),
             nn.Linear(repr_dim, repr_dim),
@@ -168,89 +162,106 @@ class JEPAModel(nn.Module):
             nn.Linear(repr_dim, repr_dim),
             nn.LayerNorm(repr_dim)
         ).to(device)
-
-        # 创建目标网络
-        self.target_encoder = copy.deepcopy(self.online_encoder)
-        self.target_projector = copy.deepcopy(self.online_projector)
         
-        # 冻结目标网络参数
+        # 目标编码器
+        self.target_encoder = copy.deepcopy(self.online_encoder)
         for param in self.target_encoder.parameters():
             param.requires_grad = False
-        for param in self.target_projector.parameters():
-            param.requires_grad = False
-
-    @torch.no_grad()
-    def update_target_encoder(self):
-        tau = 1 - self.momentum  # 使用更高的momentum值
-        for online_params, target_params in zip(self.online_encoder.parameters(), self.target_encoder.parameters()):
-            target_params.data.mul_(self.momentum).add_(tau * online_params.data)
-        for online_params, target_params in zip(self.online_projector.parameters(), self.target_projector.parameters()):
-            target_params.data.mul_(self.momentum).add_(tau * online_params.data)
+            
+    def compute_system_energy(self, states, actions):
+        """
+        计算整个观察-动作序列的系统能量
+        """
+        B, T, C, H, W = states.shape
+        
+        # 获取所有状态的目标表示
+        with torch.no_grad():
+            target_states = self.target_encoder(
+                states.view(-1, C, H, W)
+            ).view(B, T, -1)
+        
+        # 获取初始状态表示
+        current_state = self.online_encoder(states[:, 0])
+        total_energy = 0
+        predictions = [current_state]
+        
+        # 计算每个时间步的能量
+        for t in range(T-1):
+            # 预测下一个状态
+            action = actions[:, t]
+            pred_next_state = self.predictor(
+                torch.cat([current_state, action], dim=-1)
+            )
+            predictions.append(pred_next_state)
+            
+            # 计算与目标状态的距离
+            energy = energy_distance(pred_next_state, target_states[:, t+1])
+            total_energy = total_energy + energy.mean()
+            
+            # 更新当前状态
+            if self.training:
+                current_state = self.online_encoder(states[:, t+1])
+            else:
+                current_state = pred_next_state
+                
+        predictions = torch.stack(predictions, dim=1)
+        return total_energy / (T-1), predictions
 
     def forward(self, states, actions):
-        B, T, C, H, W = states.shape
-        device = states.device
-
-        predictions = []
-        online_preds = []
-        targets = []
-
-        if self.training:
-            # 编码所有状态并应用BYOL
-            state_reprs = self.online_encoder(states.view(B * T, C, H, W))
-            state_reprs = state_reprs.view(B, T, -1)  # [B, T, D]
+        """
+        前向传播，返回系统能量和预测序列
+        """
+        energy, predictions = self.compute_system_energy(states, actions)
+        return energy, predictions
+        
+    @torch.no_grad()
+    def update_target_encoder(self):
+        """
+        更新目标编码器的参数
+        """
+        tau = 1 - self.momentum
+        for online_params, target_params in zip(
+            self.online_encoder.parameters(), 
+            self.target_encoder.parameters()
+        ):
+            target_params.data.mul_(self.momentum).add_(
+                tau * online_params.data
+            )
             
-            # BYOL投影和预测
-            online_preds = self.online_projector(state_reprs)
-            online_preds = self.online_predictor(online_preds)
-            
-            with torch.no_grad():
-                target_reprs = self.target_encoder(states.view(B * T, C, H, W))
-                target_reprs = target_reprs.view(B, T, -1)
-                targets = self.target_projector(target_reprs)
-
-            # 当前状态表示
-            current_repr = state_reprs[:, 0]
-            predictions.append(current_repr.unsqueeze(1))
-
-            # 预测未来状态
-            for t in range(T - 1):
-                action = actions[:, t]
-                pred_repr = self.predictor(torch.cat([current_repr, action], dim=-1))
-                predictions.append(pred_repr.unsqueeze(1))
-                current_repr = state_reprs[:, t + 1]
-
-        else:
-            # 推理模式
-            current_repr = self.online_encoder(states[:, 0])
-            predictions.append(current_repr.unsqueeze(1))
-
-            for t in range(T - 1):
-                action = actions[:, t]
-                pred_repr = self.predictor(torch.cat([current_repr, action], dim=-1))
-                predictions.append(pred_repr.unsqueeze(1))
-                current_repr = pred_repr
-
-        predictions = torch.cat(predictions, dim=1)
-        return predictions, online_preds, targets
-
     def predict_future(self, init_states, actions):
+        """
+        预测未来状态序列
+        """
         B, _, C, H, W = init_states.shape
-        T_minus1 = actions.shape[1] 
-        T = T_minus1 + 1
+        T = actions.shape[1] + 1
         
-        predicted_reprs = []
+        predictions = []
+        current_state = self.online_encoder(init_states[:, 0])
+        predictions.append(current_state.unsqueeze(0))
         
-        # 初始状态
-        current_repr = self.online_encoder(init_states[:, 0])
-        predicted_reprs.append(current_repr.unsqueeze(0))
-        
-        # 预测未来状态
-        for t in range(T_minus1):
+        for t in range(T-1):
             action = actions[:, t]
-            pred_repr = self.predictor(torch.cat([current_repr, action], dim=-1))
-            predicted_reprs.append(pred_repr.unsqueeze(0))
-            current_repr = pred_repr
+            pred_next = self.predictor(
+                torch.cat([current_state, action], dim=-1)
+            )
+            predictions.append(pred_next.unsqueeze(0))
+            current_state = pred_next
             
-        predicted_reprs = torch.cat(predicted_reprs, dim=0)
-        return predicted_reprs
+        return torch.cat(predictions, dim=0)
+
+class ResidualBlock(nn.Module):
+    """残差块用于增强特征提取"""
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        
+    def forward(self, x):
+        residual = x
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += residual
+        out = F.relu(out)
+        return out
