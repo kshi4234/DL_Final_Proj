@@ -4,7 +4,7 @@ from torch import nn
 from torch.nn import functional as F
 import torch
 import torch.nn.functional as F
-
+import copy
 
 def build_mlp(layers_dims: List[int]):
     layers = []
@@ -158,14 +158,7 @@ class JEPAModel(nn.Module):
         ).to(device)
 
         # Predictor with stronger state-action fusion
-        self.predictor = nn.Sequential(
-            StateActionFusion(repr_dim, action_dim),
-            nn.Linear(repr_dim, repr_dim),
-            nn.LayerNorm(repr_dim),
-            nn.ReLU(),
-            nn.Linear(repr_dim, repr_dim),
-            nn.LayerNorm(repr_dim)
-        ).to(device)
+        self.predictor = StateActionFusion(repr_dim, action_dim).to(device)
 
         # Target networks
         self.target_encoder = copy.deepcopy(self.online_encoder)
@@ -189,7 +182,7 @@ class JEPAModel(nn.Module):
         # Generate predictions
         for t in range(T-1):
             action = actions[:, t]
-            pred_next = self.predictor(StateActionPair(current_state, action))
+            pred_next = self.predictor(current_state, action)
             predictions.append(pred_next.unsqueeze(1))
             
             if self.training:
@@ -201,15 +194,7 @@ class JEPAModel(nn.Module):
         return predictions, online_states, target_states
 
     def predict_future(self, init_states, actions):
-        """
-        Predict future states given initial states and actions sequence
-        Args:
-            init_states: [B, 1, Ch, H, W] - Initial states
-            actions: [B, T-1, action_dim] - Sequence of actions
-            
-        Returns:
-            predicted_states: [T, B, D] - Predicted state representations 
-        """
+        """Predict future states given initial states and actions sequence"""
         B, _, C, H, W = init_states.shape
         T_minus1 = actions.shape[1]
         T = T_minus1 + 1
@@ -224,10 +209,8 @@ class JEPAModel(nn.Module):
         # Predict future states autoregressively
         for t in range(T_minus1):
             action = actions[:, t]  # [B, action_dim]
-            # Predict next state representation
-            next_repr = self.predictor(StateActionPair(current_repr, action))  # [B, D]
+            next_repr = self.predictor(current_repr, action)  # [B, D]
             predicted_reprs.append(next_repr.unsqueeze(0))  # Add to predictions
-            # Update current state for next iteration
             current_repr = next_repr
         
         # Stack all predictions
@@ -243,7 +226,6 @@ class JEPAModel(nn.Module):
         ):
             target_params.data.mul_(self.momentum).add_(tau * online_params.data)
 
-# Helper classes remain the same
 class SpatialAttentionBlock(nn.Module):
     """Spatial attention mechanism to focus on important regions"""
     def __init__(self, channels):
@@ -264,29 +246,13 @@ class StateActionFusion(nn.Module):
         self.fusion = nn.Sequential(
             nn.Linear(repr_dim * 2, repr_dim),
             nn.LayerNorm(repr_dim),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.Linear(repr_dim, repr_dim),
+            nn.LayerNorm(repr_dim)
         )
 
-    def forward(self, state_action_pair):
-        state, action = state_action_pair
+    def forward(self, state, action):
         state_feat = self.state_proj(state)
         action_feat = self.action_proj(action)
         combined = torch.cat([state_feat, action_feat], dim=-1)
         return self.fusion(combined)
-
-class ResidualBlock(nn.Module):
-    """残差块用于增强特征提取"""
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        
-    def forward(self, x):
-        residual = x
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += residual
-        out = F.relu(out)
-        return out
