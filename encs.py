@@ -202,3 +202,16 @@ class ViT(nn.Module):
 
         x = self.mlp_head(x)
         return x
+
+def build_vit(input_channels=2, repr_dim=256):
+    return ViT(
+        img_size=65,
+        patch_size=5,
+        in_channels=input_channels,
+        embed_dim=repr_dim,
+        depth=6,
+        num_heads=8,
+        mlp_ratio=2,
+        dropout=0.0,
+        use_cls_token=True
+    )
