@@ -147,7 +147,7 @@ class JEPAModel(nn.Module):
 
         self.online_encoder = build_resnet().to(device)
         self.online_projector = Projector(projected_dim=proj_dim, repr_dim=repr_dim).to(device)
-        self.online_predictor = ResPredictor().to(device)
+        self.online_predictor = OnlinePredictor(projected_dim=proj_dim).to(device)
         self.target_encoder = build_resnet().to(device)
         self.target_projector = Projector(projected_dim=proj_dim, repr_dim=repr_dim).to(device)
         # Target encoder does not require backprop for BYOL; freeze target encoder parameters
@@ -156,7 +156,7 @@ class JEPAModel(nn.Module):
         for param in self.target_projector.parameters():
             param.requires_grad = False
         
-        self.predictor = Predictor(repr_dim, action_dim).to(device)
+        self.predictor = ResPredictor(repr_dim=repr_dim, action_dim=action_dim).to(device)
 
         # Initialize target encoder parameters with encoder parameters
         for param_q, param_k in zip(self.online_encoder.parameters(), self.target_encoder.parameters()):
