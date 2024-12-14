@@ -151,7 +151,7 @@ def train_model(device):
 
     model = JEPAModel(device=device).to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(list(model.parameters()) + list(model.encoder.parameters()), lr=1e-4)
 
     num_epochs = 1
     max_it = 500
@@ -177,15 +177,15 @@ def train_model(device):
             aug_states1 = apply_augmentation(states)  # [B, T, C, H, W]
             aug_states2 = apply_augmentation(states)  # [B, T, C, H, W]
             z1 = model.encoder(
-                aug_states1.view(-1, *aug_states1.shape[2:])
+                aug_states1.view(-1, *aug_states1.shape[2:]), bt=True
             ).view(aug_states1.size(0), aug_states1.size(1), -1)  # [B, T, D]
 
             z2 = model.encoder(
-                aug_states2.view(-1, *aug_states2.shape[2:])
+                aug_states2.view(-1, *aug_states2.shape[2:]), bt=True
             ).view(aug_states2.size(0), aug_states2.size(1), -1)  # [B, T, D]
 
             bt_loss = barlow_twins_loss(z1, z2)
-            jep_co = 0.01
+            jep_co = 0.4
             total_loss_batch = jep_co * jepa_loss + (1-jep_co) * bt_loss
             optimizer.zero_grad()
             total_loss_batch.backward()

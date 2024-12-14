@@ -72,7 +72,7 @@ class Prober(torch.nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_channels=2, input_size=(65, 65), repr_dim=256):
+    def __init__(self, input_channels=2, input_size=(65, 65), repr_dim=256, projection_hidden_dim=256):
         super().__init__()
         self.conv_net = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1),
@@ -94,9 +94,22 @@ class Encoder(nn.Module):
             nn.ReLU(),
         )
 
-    def forward(self, x):
+        self.projection = nn.Sequential(
+            nn.Linear(repr_dim, projection_hidden_dim),
+            nn.BatchNorm1d(projection_hidden_dim),
+            nn.ReLU(True),
+            nn.Linear(projection_hidden_dim, projection_hidden_dim),
+            nn.BatchNorm1d(projection_hidden_dim),
+            nn.ReLU(True),
+            nn.Linear(projection_hidden_dim, repr_dim),
+            nn.BatchNorm1d(repr_dim),
+        )
+
+    def forward(self, x, bt=False):
         x = self.conv_net(x)
         x = self.fc(x)
+        if bt:
+            return self.projection(x)
         return x
 
 
