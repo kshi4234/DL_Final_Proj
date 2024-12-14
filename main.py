@@ -146,21 +146,13 @@ def train_model(device):
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-    num_epochs = 3
+    num_epochs = 1
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
         for batch_idx, batch in enumerate(tqdm(train_loader, desc=f"Training Epoch {epoch+1}")):
             states = batch.states  # [B, T, C, H, W]
             actions = batch.actions  # [B, T-1, action_dim]
-
-            v1 = apply_augmentation(states)
-            v2 = apply_augmentation(states)
-
-            z1 = model.encoder(v1)
-            z2 = model.encoder(v2)
-            bt_loss = barlow_twins_loss(z1, z2)
-
 
             predictions = model(states, actions)  # [B, T, D]
             # Compute target representations using the target encoder
@@ -170,14 +162,12 @@ def train_model(device):
                 ).view(states.size(0), states.size(1), -1)  # [B, T, D]
 
             # Compute loss between predictions[:, 1:] and targets[:, 1:]
-            jepa_loss = je_loss(predictions[:, 1:], targets[:, 1:])
-
-            total_batch_loss = 0.6 * jepa_loss + 0.4 * bt_loss
+            loss = je_loss(predictions[:, 1:], targets[:, 1:])
 
             optimizer.zero_grad()
-            total_batch_loss.backward()
+            loss.backward()
             optimizer.step()
-            total_loss += total_batch_loss.item()
+            total_loss += loss.item()
             # if batch_idx % 100 == 0:
                 # print(f"Batch {batch_idx}, Loss: {loss.item():.8e}")
         avg_loss = total_loss / len(train_loader)
