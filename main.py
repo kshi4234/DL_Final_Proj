@@ -182,8 +182,8 @@ def train_model(device):
 
             z2 = targets
             bt_loss = barlow_twins_loss(z1, z2)
-
-            total_loss_batch = 0.6 * jepa_loss + 0.4 * (bt_loss / 200)
+            jep_co = 0.01
+            total_loss_batch = jep_co * jepa_loss + (1-jep_co) * bt_loss
             optimizer.zero_grad()
             total_loss_batch.backward()
             optimizer.step()
