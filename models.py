@@ -124,17 +124,6 @@ class JEPAModel(nn.Module):
         self.encoder = build_resnet().to(device)
         self.predictor = ResPredictor().to(device)
 
-    def encode_sequence(self, states):
-        """Encode a sequence of states into representations"""
-        B, T, C, H, W = states.shape
-        # Flatten batch and time dimensions
-        flat_states = states.view(-1, C, H, W)
-        # Encode all states
-        flat_encodings = self.encoder(flat_states)
-        # Reshape back to sequence form
-        encodings = flat_encodings.view(B, T, -1)
-        return encodings
-
     def forward(self, states, actions):
         """
         Args:
