@@ -149,7 +149,7 @@ def train_model(device):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     num_epochs = 1
-    max_iterations = 1000
+    max_iterations = 500
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
@@ -183,8 +183,9 @@ def train_model(device):
             total_loss_batch.backward()
             optimizer.step()
             total_loss += total_loss_batch.item()
-            # if batch_idx % 100 == 0:
-                # print(f"Batch {batch_idx}, Loss: {loss.item():.8e}")
+            if batch_idx % 100 == 0:
+                print(f"Batch [{batch_idx}], Total Loss: {total_loss_batch:.4f}, "
+                      f"JEPA Loss: {jepa_loss:.4f}, BT Loss: {bt_loss:.4f}")
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.8e}")
 
