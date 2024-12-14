@@ -7,6 +7,7 @@ import glob
 from tqdm import tqdm
 import torch.nn.functional as F
 import torchvision.transforms as T
+import torchvision.transforms.functional as TF
 
 def get_device():
     """Check for GPU availability."""
@@ -14,14 +15,29 @@ def get_device():
     print("Using device:", device)
     return device
 
-data_augmentation = T.Compose([
-    T.RandomCrop(65, padding=4),               # Spatial cropping
-    T.RandomHorizontalFlip(p=0.5),            # Random horizontal flip
-    T.RandomVerticalFlip(p=0.5),              # Random vertical flip
-    T.RandomRotation(degrees=15),             # Small rotations
-    T.ColorJitter(brightness=0.2, contrast=0.2), # Adjust brightness and contrast
-    T.Lambda(lambda x: x + 0.01 * torch.randn_like(x)),  # Gaussian noise
-])
+def channel_wise_augmentation(image):
+    """
+    Apply augmentations channel-wise for a 2-channel image.
+    Args:
+        image: Tensor of shape [2, H, W]
+    Returns:
+        Augmented image with same shape
+    """
+    # Apply augmentations to each channel separately
+    augmented_channels = []
+    for channel in image:
+        augmented_channel = T.Compose([
+            T.RandomCrop(65, padding=4),
+            T.RandomHorizontalFlip(p=0.5),
+            T.RandomVerticalFlip(p=0.5),
+            T.RandomRotation(degrees=15),
+            T.ColorJitter(brightness=0.2, contrast=0.2),
+            T.Lambda(lambda x: x + 0.01 * torch.randn_like(x)),
+        ])(TF.to_pil_image(channel.unsqueeze(0)))
+        augmented_channels.append(TF.to_tensor(augmented_channel).squeeze(0))
+
+    # Stack channels back together
+    return torch.stack(augmented_channels, dim=0)
 
 def load_data(device):
     data_path = "/scratch/DL24FA"
@@ -132,8 +148,8 @@ def train_model(device):
             states = batch.states  # [B, T, C, H, W]
             actions = batch.actions  # [B, T-1, action_dim]
 
-            view1 = torch.stack([data_augmentation(state) for state in states.view(-1, *states.shape[2:])])
-            view2 = torch.stack([data_augmentation(state) for state in states.view(-1, *states.shape[2:])])
+            view1 = torch.stack([channel_wise_augmentation(state) for state in states.view(-1, *states.shape[2:])])
+            view2 = torch.stack([channel_wise_augmentation(state) for state in states.view(-1, *states.shape[2:])])
 
             view1 = view1.view(states.size())  # Reshape to original dimensions
             view2 = view2.view(states.size())
@@ -160,8 +176,8 @@ def train_model(device):
             optimizer.step()
             total_loss += total_batch_loss.item()
 
-            if batch_idx % 100 == 0:
-                print(f"Batch {batch_idx}, JEPA Loss: {jepa_loss.item():.8e}, BT Loss: {bt_loss.item():.8e}, Total Loss: {total_batch_loss.item():.8e}")
+            #if batch_idx % 100 == 0:
+                #print(f"Batch {batch_idx}, JEPA Loss: {jepa_loss.item():.8e}, BT Loss: {bt_loss.item():.8e}, Total Loss: {total_batch_loss.item():.8e}")
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.8e}")
 
