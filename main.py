@@ -6,6 +6,7 @@ from models import JEPAModel
 import glob
 from tqdm import tqdm
 import torch.nn.functional as F
+import torchvision.transforms.functional as VF
 import random
 
 def get_device():
@@ -116,10 +117,10 @@ def apply_augmentation(states):
         for t in range(T):
             frame = sample[t]  # [C, H, W]
             if do_hflip:
-                frame = F.hflip(frame)
+                frame = VF.hflip(frame)
             if do_vflip:
-                frame = F.vflip(frame)
-            frame = F.rotate(frame, angle)
+                frame = VF.vflip(frame)
+            frame = VF.rotate(frame, angle)
 
             # Add noise
             noise = torch.randn_like(frame) * 0.01
