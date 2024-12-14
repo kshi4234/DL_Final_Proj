@@ -76,6 +76,59 @@ def je_loss(predictions, targets):
     loss = 1 - F.cosine_similarity(predictions, targets, dim=-1).mean()
     return loss
 
+def barlow_twins_loss(z1, z2, lambda_=0.0051):
+    # z1, z2: [B, D]
+    # Normalize
+    z1 = (z1 - z1.mean(0)) / z1.std(0)
+    z2 = (z2 - z2.mean(0)) / z2.std(0)
+
+    # Cross-correlation matrix
+    c = torch.matmul(z1.T, z2) / z1.size(0)
+
+    # On-diagonal: want these to be 1
+    diag = torch.diagonal(c)
+    loss_diag = (diag - 1).pow(2).sum()
+
+    # Off-diagonal: want these to be 0
+    off_diag = c[~torch.eye(c.size(0), dtype=bool)].pow(2).sum()
+
+    loss = loss_diag + lambda_ * off_diag
+    return loss
+
+def apply_augmentation(states):
+    # states: [B, T, C, H, W]
+    B, T, C, H, W = states.shape
+
+    aug_states = []
+    for b in range(B):
+        sample = states[b]  # [T, C, H, W]
+
+        # Decide on aug parameters (flip, rotate, etc.)
+        do_hflip = random.random() < 0.5
+        do_vflip = random.random() < 0.5
+        angles = [0, 90, 180, 270]
+        angle = random.choice(angles)
+
+        # Apply same augmentation to each frame in the sequence
+        aug_frames = []
+        for t in range(T):
+            frame = sample[t]  # [C, H, W]
+            if do_hflip:
+                frame = F.hflip(frame)
+            if do_vflip:
+                frame = F.vflip(frame)
+            frame = F.rotate(frame, angle)
+
+            # Add noise
+            noise = torch.randn_like(frame) * 0.01
+            frame = frame + noise
+
+            aug_frames.append(frame)
+        aug_frames = torch.stack(aug_frames, dim=0)  # [T, C, H, W]
+        aug_states.append(aug_frames)
+
+    aug_states = torch.stack(aug_states, dim=0)  # [B, T, C, H, W]
+    return aug_states
 
 def train_model(device):
     # Load training data
@@ -86,8 +139,7 @@ def train_model(device):
         train=True,
     )
 
-    model = JEPAModel(device=device)
-    model.to(device)
+    model = JEPAModel(device=device).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
@@ -99,9 +151,15 @@ def train_model(device):
             states = batch.states  # [B, T, C, H, W]
             actions = batch.actions  # [B, T-1, action_dim]
 
-            optimizer.zero_grad()
-            predictions = model(states, actions)  # [B, T, D]
+            v1 = apply_augmentation(states)
+            v2 = apply_augmentation(states)
 
+            z1 = model.encoder(v1)
+            z2 = model.encoder(v2)
+            bt_loss = barlow_twins_loss(z1, z2)
+
+
+            predictions = model(states, actions)  # [B, T, D]
             # Compute target representations using the target encoder
             with torch.no_grad():
                 targets = model.encoder(
@@ -109,12 +167,16 @@ def train_model(device):
                 ).view(states.size(0), states.size(1), -1)  # [B, T, D]
 
             # Compute loss between predictions[:, 1:] and targets[:, 1:]
-            loss = je_loss(predictions[:, 1:], targets[:, 1:])
-            loss.backward()
+            jepa_loss = je_loss(predictions[:, 1:], targets[:, 1:])
+
+            total_batch_loss = 0.6 * jepa_loss + 0.4 * bt_loss
+
+            optimizer.zero_grad()
+            total_batch_loss.backward()
             optimizer.step()
-            total_loss += loss.item()
-            if batch_idx % 100 == 0:
-                print(f"Batch {batch_idx}, Loss: {loss.item():.8e}")
+            total_loss += total_batch_loss.item()
+            # if batch_idx % 100 == 0:
+                # print(f"Batch {batch_idx}, Loss: {loss.item():.8e}")
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.8e}")
 
