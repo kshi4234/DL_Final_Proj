@@ -6,6 +6,8 @@ from models import JEPAModel
 import glob
 from tqdm import tqdm
 import torch.nn.functional as F
+import random
+
 def get_device():
     """Check for GPU availability."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
