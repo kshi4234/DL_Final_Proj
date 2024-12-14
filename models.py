@@ -94,22 +94,9 @@ class Encoder(nn.Module):
             nn.ReLU(),
         )
 
-        self.projection = nn.Sequential(
-            nn.Linear(repr_dim, projection_hidden_dim),
-            nn.BatchNorm1d(projection_hidden_dim),
-            nn.ReLU(True),
-            nn.Linear(projection_hidden_dim, projection_hidden_dim),
-            nn.BatchNorm1d(projection_hidden_dim),
-            nn.ReLU(True),
-            nn.Linear(projection_hidden_dim, repr_dim),
-            nn.BatchNorm1d(repr_dim),
-        )
-
-    def forward(self, x, bt=False):
+    def forward(self, x):
         x = self.conv_net(x)
         x = self.fc(x)
-        if bt:
-            return self.projection(x)
         return x
 
 

@@ -153,14 +153,11 @@ def train_model(device):
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-    num_epochs = 1
-    max_it = 500
+    num_epochs = 5
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
         for batch_idx, batch in enumerate(tqdm(train_loader, desc=f"Training Epoch {epoch+1}")):
-            if max_it < batch_idx:
-                break
             states = batch.states  # [B, T, C, H, W]
             actions = batch.actions  # [B, T-1, action_dim]
 
@@ -171,18 +168,12 @@ def train_model(device):
                     states.view(-1, *states.shape[2:])
                 ).view(states.size(0), states.size(1), -1)  # [B, T, D]
 
-            # Compute loss between predictions[:, 1:] and targets[:, 1:]
-            jepa_loss = je_loss(predictions[:, 1:], targets[:, 1:])
+            jepa_loss = F.smooth_l1_loss(predictions, targets)
 
-            aug_states1 = apply_augmentation(states)  # [B, T, C, H, W]
-            aug_states2 = apply_augmentation(states)  # [B, T, C, H, W]
             z1 = model.encoder(
-                aug_states1.view(-1, *aug_states1.shape[2:]), bt=True
-            ).view(aug_states1.size(0), aug_states1.size(1), -1)  # [B, T, D]
-
-            z2 = model.encoder(
-                aug_states2.view(-1, *aug_states2.shape[2:]), bt=True
-            ).view(aug_states2.size(0), aug_states2.size(1), -1)  # [B, T, D]
+                states.view(-1, *states.shape[2:])
+            ).view(states.size(0), states.size(1), -1)  # [B, T, D]
+            z2 = predictions
 
             bt_loss = barlow_twins_loss(z1, z2)
             if batch_idx < 400:
