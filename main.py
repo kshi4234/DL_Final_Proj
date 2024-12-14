@@ -180,7 +180,7 @@ def train_model(device):
                     aug_states.view(-1, *aug_states.shape[2:])
                 ).view(aug_states.size(0), aug_states.size(1), -1)  # [B, T, D]
 
-            z2 = targets
+            z2 = predictions
             bt_loss = barlow_twins_loss(z1, z2)
             jep_co = 0.01
             total_loss_batch = jep_co * jepa_loss + (1-jep_co) * bt_loss
