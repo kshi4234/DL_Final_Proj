@@ -154,10 +154,13 @@ def train_model(device):
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     num_epochs = 1
+    max_it = 500
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
         for batch_idx, batch in enumerate(tqdm(train_loader, desc=f"Training Epoch {epoch+1}")):
+            if max_it < batch_idx:
+                break
             states = batch.states  # [B, T, C, H, W]
             actions = batch.actions  # [B, T-1, action_dim]
 
