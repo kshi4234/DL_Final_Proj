@@ -171,13 +171,16 @@ def train_model(device):
             # Compute loss between predictions[:, 1:] and targets[:, 1:]
             jepa_loss = je_loss(predictions[:, 1:], targets[:, 1:])
 
-            aug_states = apply_augmentation(states)  # [B, T, C, H, W]
-            with torch.no_grad():
-                z1 = model.encoder(
-                    aug_states.view(-1, *aug_states.shape[2:])
-                ).view(aug_states.size(0), aug_states.size(1), -1)  # [B, T, D]
+            aug_states1 = apply_augmentation(states)  # [B, T, C, H, W]
+            aug_states2 = apply_augmentation(states)  # [B, T, C, H, W]
+            z1 = model.encoder(
+                aug_states1.view(-1, *aug_states1.shape[2:])
+            ).view(aug_states1.size(0), aug_states1.size(1), -1)  # [B, T, D]
 
-            z2 = predictions
+            z2 = model.encoder(
+                aug_states2.view(-1, *aug_states2.shape[2:])
+            ).view(aug_states2.size(0), aug_states2.size(1), -1)  # [B, T, D]
+
             bt_loss = barlow_twins_loss(z1, z2)
             jep_co = 0.01
             total_loss_batch = jep_co * jepa_loss + (1-jep_co) * bt_loss
