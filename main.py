@@ -151,7 +151,7 @@ def train_model(device):
 
     model = JEPAModel(device=device).to(device)
 
-    optimizer = torch.optim.Adam(list(model.parameters()) + list(model.encoder.parameters()), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
     num_epochs = 1
     max_it = 500
@@ -185,7 +185,10 @@ def train_model(device):
             ).view(aug_states2.size(0), aug_states2.size(1), -1)  # [B, T, D]
 
             bt_loss = barlow_twins_loss(z1, z2)
-            jep_co = 0.4
+            if batch_idx < 400:
+                jep_co = 0
+            else:
+                jep_co = min(0.2, batch_idx/10000)
             total_loss_batch = jep_co * jepa_loss + (1-jep_co) * bt_loss
             optimizer.zero_grad()
             total_loss_batch.backward()
