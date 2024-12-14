@@ -79,23 +79,25 @@ def je_loss(predictions, targets):
     loss = 1 - F.cosine_similarity(predictions, targets, dim=-1).mean()
     return loss
 
-def barlow_twins_loss(z1, z2, lambda_=0.0051):
-    # z1, z2: [B, D]
-    # Normalize
-    z1 = (z1 - z1.mean(0)) / z1.std(0)
-    z2 = (z2 - z2.mean(0)) / z2.std(0)
+def barlow_twins_loss(z1, z2, lambda_param=0.0051):
+    # Flatten time dimension into batch dimension
+    B, T, D = z1.shape
+    z1_flat = z1.view(-1, D)  # [B*T, D]
+    z2_flat = z2.view(-1, D)  # [B*T, D]
+
+    # Normalize representations along the batch dimension
+    z1_norm = (z1_flat - z1_flat.mean(0)) / (z1_flat.std(0) + 1e-5)
+    z2_norm = (z2_flat - z2_flat.mean(0)) / (z2_flat.std(0) + 1e-5)
 
     # Cross-correlation matrix
-    c = torch.matmul(z1.T, z2) / z1.size(0)
+    batch_size = z1_norm.shape[0]
+    c = torch.matmul(z1_norm.T, z2_norm) / batch_size
 
-    # On-diagonal: want these to be 1
-    diag = torch.diagonal(c)
-    loss_diag = (diag - 1).pow(2).sum()
+    # Loss terms
+    on_diag = torch.diagonal(c).add_(-1).pow_(2).sum()
+    off_diag = c.flatten()[:-1].view(c.size(0) - 1, c.size(1) + 1)[:, 1:].pow_(2).sum()
 
-    # Off-diagonal: want these to be 0
-    off_diag = c[~torch.eye(c.size(0), dtype=bool)].pow(2).sum()
-
-    loss = loss_diag + lambda_ * off_diag
+    loss = on_diag + lambda_param * off_diag
     return loss
 
 def apply_augmentation(states):
@@ -162,12 +164,20 @@ def train_model(device):
                 ).view(states.size(0), states.size(1), -1)  # [B, T, D]
 
             # Compute loss between predictions[:, 1:] and targets[:, 1:]
-            loss = je_loss(predictions[:, 1:], targets[:, 1:])
+            jepa_loss = je_loss(predictions[:, 1:], targets[:, 1:])
 
+            aug_states1 = apply_augmentation(states)  # [B, T, C, H, W]
+            aug_states2 = apply_augmentation(states)  # [B, T, C, H, W]
+
+            z1 = model.encode_sequence(aug_states1)  # [B, T, D]
+            z2 = model.encode_sequence(aug_states2)  # [B, T, D]
+            bt_loss = barlow_twins_loss(z1, z2)
+
+            total_loss_batch = 0.6 * jepa_loss + 0.4 * bt_loss
             optimizer.zero_grad()
-            loss.backward()
+            total_loss_batch.backward()
             optimizer.step()
-            total_loss += loss.item()
+            total_loss += total_loss_batch.item()
             # if batch_idx % 100 == 0:
                 # print(f"Batch {batch_idx}, Loss: {loss.item():.8e}")
         avg_loss = total_loss / len(train_loader)
