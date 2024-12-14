@@ -76,7 +76,12 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
 
 
 def je_loss(predictions, targets):
-    loss = 1 - F.cosine_similarity(predictions, targets, dim=-1).mean()
+    similarities = F.cosine_similarity(predictions, targets, dim=-1)  # [B, T]
+    loss_per_sample = 1 - similarities  # [B, T]
+    # Now sum over the trajectory dimension T
+    loss_per_sample = loss_per_sample.sum(dim=1)  # [B]
+    # Then, if desired, average over the batch
+    loss = loss_per_sample.mean()  # scalar
     return loss
 
 def barlow_twins_loss(z1, z2, lambda_param=0.0051):
