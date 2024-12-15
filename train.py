@@ -15,7 +15,7 @@ def je_loss(predictions, targets):
     return loss
 
 
-def barlow_twins_loss(z1, z2, lambda_param=0.0051):
+def barlow_twins_loss(z1, z2, lambda_param=0.005):
     # b, t, d
     B, T, D = z1.shape
     z1_flat = z1.view(-1, D)
@@ -67,8 +67,11 @@ def train_model(device):
     model = JEPAModel(device=device).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
 
     num_epochs = 5
+    max_grad_norm = 1.0
+
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
@@ -84,6 +87,7 @@ def train_model(device):
                 ).view(states.size(0), states.size(1), -1)
             # distance
             jepa_loss = F.smooth_l1_loss(predictions, targets)
+
             # with grad
             # temporal states rep s0 s1' ...
             z1 = model.encoder(
@@ -93,17 +97,21 @@ def train_model(device):
             z2 = predictions
             # barlow twins loss between predicted and encoded reps
             bt_loss = barlow_twins_loss(z1, z2)
-            # try starting with barlow twins loss only
+
+            # back
             jep_co = 0.2
             total_loss_batch = jep_co * jepa_loss + (1-jep_co) * bt_loss
             optimizer.zero_grad()
             total_loss_batch.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             optimizer.step()
             total_loss += total_loss_batch.item()
+
+        scheduler.step()
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.8e}")
-    # Save the trained model
-    torch.save(model.state_dict(), 'jepa_model.pth')
+    # Save
+    torch.save(model.state_dict(), 'model_weights.pth')
 
 
 def get_device():

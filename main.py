@@ -82,7 +82,7 @@ def load_model():
     model = JEPAModel(device=device)
     model.to(device)
     try:
-        model.load_state_dict(torch.load('jepa_model.pth'))
+        model.load_state_dict(torch.load('model_weights.pth'))
         print("Loaded saved JEPA model.")
     except FileNotFoundError:
         print("No saved model found, initializing a new model.")
