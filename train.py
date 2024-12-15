@@ -94,10 +94,7 @@ def train_model(device):
             # barlow twins loss between predicted and encoded reps
             bt_loss = barlow_twins_loss(z1, z2)
             # try starting with barlow twins loss only
-            if batch_idx < 400:
-                jep_co = 0
-            else:
-                jep_co = min(0.2, batch_idx/10000)
+            jep_co = 0.2
             total_loss_batch = jep_co * jepa_loss + (1-jep_co) * bt_loss
             optimizer.zero_grad()
             total_loss_batch.backward()
