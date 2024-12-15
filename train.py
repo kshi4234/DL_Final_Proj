@@ -66,11 +66,11 @@ def train_model(device):
 
     model = JEPAModel(device=device).to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
-
     num_epochs = 5
     max_grad_norm = 1.0
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
 
     for epoch in range(num_epochs):
         model.train()
