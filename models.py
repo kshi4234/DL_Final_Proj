@@ -4,6 +4,8 @@ from torch import nn
 from torch.nn import functional as F
 import torch
 import torch.nn.functional as F
+from encs import ResNet, build_resnet
+from preds import ResPredictor, RNNPredictor
 
 
 def build_mlp(layers_dims: List[int]):
@@ -70,7 +72,7 @@ class Prober(torch.nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_channels=2, input_size=(65, 65), repr_dim=256):
+    def __init__(self, input_channels=2, input_size=(65, 65), repr_dim=256, projection_hidden_dim=256):
         super().__init__()
         self.conv_net = nn.Sequential(
             nn.Conv2d(input_channels, 32, kernel_size=3, stride=2, padding=1),
@@ -111,27 +113,16 @@ class Predictor(nn.Module):
         x = torch.cat([repr, action], dim=-1)
         return self.mlp(x)
 
+
 class JEPAModel(nn.Module):
-    def __init__(self, device="cuda", repr_dim=256, action_dim=2, momentum=0.999):
+    def __init__(self, device="cuda", repr_dim=256, action_dim=2):
         super().__init__()
         self.device = device
         self.repr_dim = repr_dim
         self.action_dim = action_dim
-        self.momentum = momentum
 
-        self.encoder = Encoder(repr_dim=repr_dim).to(device)
-        self.target_encoder = Encoder(repr_dim=repr_dim).to(device)
-        self.predictor = Predictor(repr_dim, action_dim).to(device)
-
-        # Initialize target encoder parameters with encoder parameters
-        for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
-            param_k.data.copy_(param_q.data)
-            param_k.requires_grad = False  # Stop gradients for target encoder
-
-    @torch.no_grad()
-    def update_target_encoder(self):
-        for param_q, param_k in zip(self.encoder.parameters(), self.target_encoder.parameters()):
-            param_k.data = param_k.data * self.momentum + param_q.data * (1.0 - self.momentum)
+        self.encoder = Encoder().to(device)
+        self.predictor = Predictor().to(device)
 
     def forward(self, states, actions):
         """
@@ -149,32 +140,14 @@ class JEPAModel(nn.Module):
         device = states.device
 
         predictions = []
-        if self.training:
-            # Encode all states
-            state_reprs = self.encoder(states.view(B * T, C, H, W)).view(B, T, -1)  # [B, T, D]
+        current_repr = self.encoder(states[:, 0])  # [B, D]
+        predictions.append(current_repr.unsqueeze(1))  # [B, 1, D]
 
-            # Initial state representation
-            current_repr = state_reprs[:, 0]  # [B, D]
-
-            predictions.append(current_repr.unsqueeze(1))  # [B, 1, D]
-
-            for t in range(T - 1):
-                action = actions[:, t]  # [B, action_dim]
-                # Predict next representation
-                pred_repr = self.predictor(current_repr, action)  # [B, D]
-                predictions.append(pred_repr.unsqueeze(1))  # [B, 1, D]
-                # Update current representation with the actual next state representation
-                current_repr = state_reprs[:, t + 1]  # Use actual next state representation
-        else:
-            # Inference mode
-            current_repr = self.encoder(states[:, 0])  # [B, D]
-            predictions.append(current_repr.unsqueeze(1))  # [B, 1, D]
-
-            for t in range(T - 1):
-                action = actions[:, t]
-                pred_repr = self.predictor(current_repr, action)
-                predictions.append(pred_repr.unsqueeze(1))
-                current_repr = pred_repr  # Update current representation with prediction
+        for t in range(T - 1):
+            action = actions[:, t]
+            pred_repr = self.predictor(current_repr, action)
+            predictions.append(pred_repr.unsqueeze(1))
+            current_repr = pred_repr  # Update current representation with prediction
 
         predictions = torch.cat(predictions, dim=1)  # [B, T, D]
 
