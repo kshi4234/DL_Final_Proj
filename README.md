@@ -2,7 +2,8 @@
 
 To download:
 wget https://www.dropbox.com/scl/fi/dkk5zln32hwpbyjmgo2x1/DL_Final_Proj.zip?rlkey=3kev1dwvlo9hzag8i9yp1rhn7&st=f60uxwtd&dl=0
-unzip <File>
+
+unzip (Downloaded File)
 
 ## Overview
 
