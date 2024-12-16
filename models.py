@@ -122,7 +122,7 @@ class JEPAModel(nn.Module):
         self.action_dim = action_dim
 
         self.encoder = build_resnet().to(device)
-        self.predictor = ResPredictor().to(device)
+        self.predictor = Predictor().to(device)
 
     def forward(self, states, actions):
         """
