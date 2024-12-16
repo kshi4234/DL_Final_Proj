@@ -66,7 +66,7 @@ def train_model(device):
 
     model = JEPAModel(device=device).to(device)
 
-    num_epochs = 5
+    num_epochs = 10
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
