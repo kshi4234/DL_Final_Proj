@@ -85,7 +85,7 @@ class ResNet(nn.Module):
 
 # Use this to initialize ResNet
 def build_resnet(input_channels=2, repr_dim=256):
-    return ResNet(input_channels=input_channels, repr_dim=repr_dim, block=BasicBlock, layers=[2, 2, 2, 2])
+    return ResNet(input_channels=input_channels, repr_dim=repr_dim, block=BasicBlock, layers=[1, 1, 1, 1])
 
 
 # ViT
