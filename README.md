@@ -1,5 +1,9 @@
 # CSCI-GA 2572 Final Project
 
+To download:
+wget https://www.dropbox.com/scl/fi/dkk5zln32hwpbyjmgo2x1/DL_Final_Proj.zip?rlkey=3kev1dwvlo9hzag8i9yp1rhn7&st=f60uxwtd&dl=0
+unzip <File>
+
 ## Overview
 
 In this project, you will train a JEPA world model on a set of pre-collected trajectories from a toy environment involving an agent in two rooms.
