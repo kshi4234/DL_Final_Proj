@@ -6,6 +6,5 @@ probe_expert val loss: 3.83439994
 Number of trainable parameters: 2,879,520
 
 Training Command(s):
-1) python train.py (5 epochs of training)
-2) python train.py  (Further training to total 10 epochs worth of training)
-3) python main.py  (Loads saved model and runs evaluation)
+1) python train.py (10 epochs of training)
+2) python main.py  (Loads saved model and runs evaluation)
